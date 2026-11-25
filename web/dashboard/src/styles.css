@@ -456,6 +456,29 @@ button.row {
 .mark[data-tone="4"] { background: var(--tone-4-bg); color: var(--tone-4-fg); }
 .mark[data-tone="5"] { background: var(--tone-5-bg); color: var(--tone-5-fg); }
 
+/* A brand mark: its ink per theme comes from markInk (lib/brands.ts); the tile is a tint of that ink. */
+.mark[data-brand] {
+  background: color-mix(in srgb, var(--ink-light) 12%, var(--bg));
+  color: var(--ink-light);
+}
+
+.mark[data-brand] svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mark-large[data-brand] svg {
+  width: 24px;
+  height: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mark[data-brand] {
+    background: color-mix(in srgb, var(--ink-dark) 12%, var(--bg));
+    color: var(--ink-dark);
+  }
+}
+
 /* Panels and notices */
 
 .panel {

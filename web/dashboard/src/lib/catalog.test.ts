@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { brandFor, markInk, type Brand } from "./brands.ts";
 import { catalog, searchCatalog, type CatalogEntry } from "./catalog.ts";
 import { draftFrom, toInput, validate } from "./draft.ts";
+import type { Connection, ConnectionConfig } from "./types.ts";
 
 const entry = (id: string): CatalogEntry => {
   const found = catalog.find((candidate) => candidate.id === id);
@@ -78,4 +80,49 @@ test("search matches name or description, ignoring case", () => {
     ["github", "sentry", "linear"],
   );
   assert.deepEqual(searchCatalog("nothing like this"), []);
+});
+
+const connection = (name: string, config: ConnectionConfig): Connection => ({
+  name,
+  transport: config.kind,
+  enabled: true,
+  tool_count: 0,
+  enabled_tool_count: 0,
+  prompt_count: 0,
+  resource_count: 0,
+  config_summary: config,
+});
+
+test("every catalog entry shows its brand", () => {
+  for (const item of catalog) assert.equal(brandFor(item)?.id, item.id);
+});
+
+test("a connection is known by its endpoint before its name", () => {
+  const remote = connection("work", { kind: "streamable_http", target: "https://api.githubcopilot.com/mcp/" });
+  assert.equal(brandFor(remote)?.id, "github");
+  const misnamed = connection("github", { kind: "sse", target: "https://mcp.linear.app/sse" });
+  assert.equal(brandFor(misnamed)?.id, "linear");
+  const local = connection("files", { kind: "stdio", command: "npx", target: "npx @modelcontextprotocol/server-filesystem /srv" });
+  assert.equal(brandFor(local)?.id, "filesystem");
+});
+
+test("a custom install falls back to its name; anything else keeps the letter", () => {
+  const everything = { kind: "stdio", command: "npx", target: "npx -y @modelcontextprotocol/server-everything" } as const;
+  assert.equal(brandFor(connection("Asana", everything))?.id, "asana");
+  assert.equal(brandFor(connection("google", everything))?.id, "google");
+  assert.equal(brandFor(connection("whatsapp", everything))?.id, "whatsapp");
+  assert.equal(brandFor(connection("everything", everything)), undefined);
+  assert.equal(brandFor(connection("fetcher", { kind: "stdio", command: "npx", target: "npx mcp-server-fetch" })), undefined);
+});
+
+test("a brand color that vanishes on the canvas gives way to the foreground", () => {
+  const brand = (id: string): Brand => {
+    const found = brandFor(entry(id));
+    assert.ok(found, id);
+    return found;
+  };
+  assert.deepEqual(markInk(brand("github")), { light: "#181717", dark: null });
+  assert.deepEqual(markInk(brand("sentry")), { light: "#362D59", dark: null });
+  assert.deepEqual(markInk(brand("supabase")), { light: "#3FCF8E", dark: "#3FCF8E" });
+  assert.deepEqual(markInk(brand("fetch")), { light: null, dark: null });
 });

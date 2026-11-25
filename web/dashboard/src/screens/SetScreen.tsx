@@ -3,6 +3,7 @@ import { DeleteDialog } from "@/components/Dialog";
 import { TextField } from "@/components/fields";
 import { Async, Chevron, CopyValue, Mark, ScreenHeader } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
+import { brandFor } from "@/lib/brands";
 import { endpoints, plural } from "@/lib/format";
 import { href, navigate } from "@/lib/route";
 import {
@@ -309,7 +310,7 @@ function PickConnection({
           state={covered}
         />
         <button aria-controls={listId} aria-expanded={open} className="pick-toggle" onClick={onToggleOpen} type="button">
-          <Mark name={connection.name} />
+          <Mark brand={brandFor(connection)} name={connection.name} />
           <span className="row-text">
             <strong>{connection.name}</strong>
             <small>{summary}</small>

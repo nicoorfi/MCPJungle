@@ -1,13 +1,35 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { markInk, type Brand } from "@/lib/brands";
 import { invalidate, type Fetched } from "@/lib/useFetch";
 
-/** A soft letter mark. The tone comes from the name, so a connection keeps its color. */
-export function Mark({ name, large }: { name: string; large?: boolean }) {
+/**
+ * The tile beside a name: the brand's mark when it has one, else a soft letter
+ * whose tone comes from the name, so a connection keeps its color.
+ */
+export function Mark({ name, brand, large }: { name: string; brand?: Brand; large?: boolean }) {
+  const className = large ? "mark mark-large" : "mark";
+  if (brand) {
+    const ink = markInk(brand);
+    const style = { "--ink-light": ink.light ?? "var(--fg)", "--ink-dark": ink.dark ?? "var(--fg)" } as CSSProperties;
+    return (
+      <span aria-hidden="true" className={className} data-brand={brand.id} style={style}>
+        {brand.kind === "glyph" ? (
+          <svg fill="none" viewBox="0 0 16 16">
+            <path d={brand.path} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+          </svg>
+        ) : (
+          <svg fill="currentColor" viewBox={brand.viewBox}>
+            <path d={brand.path} />
+          </svg>
+        )}
+      </span>
+    );
+  }
   const letter = (name.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
   let hash = 0;
   for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return (
-    <span aria-hidden="true" className={large ? "mark mark-large" : "mark"} data-tone={hash % 6}>
+    <span aria-hidden="true" className={className} data-tone={hash % 6}>
       {letter}
     </span>
   );

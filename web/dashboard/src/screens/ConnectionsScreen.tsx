@@ -1,5 +1,6 @@
 import { Async, Chevron, CopyValue, Mark, ScreenHeader } from "@/components/ui";
 import { api } from "@/lib/api";
+import { brandFor } from "@/lib/brands";
 import { availableTools, connectionSummary, endpoints, plural } from "@/lib/format";
 import { href } from "@/lib/route";
 import { useFetch } from "@/lib/useFetch";
@@ -46,7 +47,7 @@ export function ConnectionsScreen({ onAdd }: { onAdd: () => void }) {
               {items.map((connection) => (
                 <li key={connection.name}>
                   <a className="row" href={href.connection(connection.name)}>
-                    <Mark name={connection.name} />
+                    <Mark brand={brandFor(connection)} name={connection.name} />
                     <span className="row-text">
                       <strong>{connection.name}</strong>
                       <small>{connectionSummary(connection)}</small>

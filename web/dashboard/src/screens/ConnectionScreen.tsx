@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { DeleteDialog } from "@/components/Dialog";
 import { Async, Chevron, CopyValue, Mark } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
+import { brandFor } from "@/lib/brands";
 import { availableTools, plural, transportLabels } from "@/lib/format";
 import { href, navigate } from "@/lib/route";
 import { notify } from "@/lib/toast";
@@ -90,7 +91,7 @@ export function ConnectionScreen({ name }: { name: string }) {
     <>
       {back}
       <div className="detail-head">
-        <Mark large name={name} />
+        <Mark brand={brandFor(connection)} large name={name} />
         <div>
           <h1>{name}</h1>
           {connection.config_summary.description ? <p className="summary">{connection.config_summary.description}</p> : null}

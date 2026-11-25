@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, errorMessage } from "@/lib/api";
+import { brandFor } from "@/lib/brands";
 import { searchCatalog, type CatalogEntry } from "@/lib/catalog";
 import { detectedProtocol, draftFrom, emptyDraft, entryInputs, suggestName, toInput, validate, type Draft, type Field } from "@/lib/draft";
 import { endpoints, plural } from "@/lib/format";
@@ -461,7 +462,7 @@ function Picker({
             {matches.map((entry) => (
               <li key={entry.id}>
                 <button className="row" onClick={() => choose(entry)} type="button">
-                  <Mark name={entry.id} />
+                  <Mark brand={brandFor(entry)} name={entry.id} />
                   <span className="row-text">
                     <strong>{entry.name}</strong>
                     <small>{entry.description}</small>
@@ -489,7 +490,7 @@ function Picker({
 function EntryHead({ entry }: { entry: CatalogEntry }) {
   return (
     <div className="entry-head">
-      <Mark name={entry.id} />
+      <Mark brand={brandFor(entry)} name={entry.id} />
       <span className="row-text">
         <span>{entry.description}</span>
         <small>{howItConnects(entry)}</small>
