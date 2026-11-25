@@ -60,7 +60,7 @@ export function draftFrom(entry: CatalogEntry): Draft {
     kind: "local",
     command: connect.command,
     args: connect.args.join("\n"),
-    sessionMode: connect.stateful ? "stateful" : "stateless",
+    sessionMode: "stateless",
   };
 }
 

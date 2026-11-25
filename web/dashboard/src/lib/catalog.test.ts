@@ -43,13 +43,12 @@ test("filesystem with a folder becomes the official npx command with the folder 
   });
 });
 
-test("an OAuth entry is its URL alone, and Playwright keeps one session", () => {
+test("an OAuth entry is its URL alone", () => {
   const linear = toInput(draftFrom(entry("linear")));
   assert.equal(linear.transport, "streamable_http");
   assert.equal(linear.url, "https://mcp.linear.app/mcp");
   assert.equal(linear.bearer_token, undefined);
   assert.equal(linear.oauth_client_id, undefined);
-  assert.equal(toInput(draftFrom(entry("playwright"))).session_mode, "stateful");
 });
 
 test("a token goes out as the bearer token, app credentials as the OAuth client", () => {

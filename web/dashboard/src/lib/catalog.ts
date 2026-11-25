@@ -29,8 +29,6 @@ export type Connect =
       command: string;
       args: string[];
       inputs: CatalogInput[];
-      /** Keep one process open, for servers that hold state between calls. */
-      stateful?: true;
     };
 
 export interface CatalogEntry {
@@ -107,14 +105,6 @@ export const catalog: CatalogEntry[] = [
     description: "Current docs for libraries and frameworks",
     docs: "https://github.com/upstash/context7",
     connect: { kind: "remote", url: "https://mcp.context7.com/mcp", auth: { kind: "none" } },
-  },
-  {
-    id: "playwright",
-    name: "Playwright",
-    description: "A headless browser agents can drive",
-    docs: "https://github.com/microsoft/playwright-mcp",
-    // Stateful, so the page an agent opened is still there on its next call.
-    connect: { kind: "local", command: "npx", args: ["-y", "@playwright/mcp@latest", "--headless"], inputs: [], stateful: true },
   },
   {
     id: "filesystem",
