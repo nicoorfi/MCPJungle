@@ -1,161 +1,99 @@
-export type AppSection =
-  | "servers"
-  | "tools"
-  | "tool_groups"
-  | "prompts"
-  | "resources"
-  | "diagnostics";
+// Dashboard API contracts (pkg/types/dashboard.go, internal/api/dashboard*.go).
+// The API speaks of servers and tool groups; the UI calls them connections and
+// tool sets. This file is the one place the two vocabularies meet.
 
-export interface DashboardEmptyState {
-  title: string;
-  description: string;
-  commands?: string[];
-}
+export type Transport = "stdio" | "streamable_http" | "sse";
+export type SessionMode = "stateless" | "stateful";
 
-export interface DashboardEndpoint {
-  label: string;
-  url: string;
-}
-
-export interface DashboardOverviewResponse {
-  status: "running" | "degraded" | "unknown";
-  mode: string;
-  version: string;
-  endpoints: DashboardEndpoint[];
-  server_count: number;
-  tool_count: number;
-  prompt_count: number;
-  resource_count: number;
-  empty_state?: DashboardEmptyState;
-  troubleshooting?: string[];
-}
-
-export interface DashboardServerConfigSummary {
-  kind: string;
+export interface ConnectionConfig {
+  kind: Transport;
   target?: string;
   command?: string;
-  argument_count?: number;
   env_keys?: string[];
   header_keys?: string[];
-  session_mode?: string;
+  session_mode?: SessionMode;
   description?: string;
-  sanitized_summary: string;
 }
 
-export interface DashboardServer {
+/** A registered upstream MCP server. */
+export interface Connection {
   name: string;
-  transport: string;
+  transport: Transport;
+  /** False while paused. */
   enabled: boolean;
-  status: "connected" | "reachable" | "failed" | "unknown";
   tool_count: number;
+  /** Tools whose own switch is on, kept while the connection is paused. */
+  enabled_tool_count: number;
   prompt_count: number;
   resource_count: number;
-  last_discovered_at?: string;
-  updated_at?: string;
-  connection_summary: string;
-  config_summary: DashboardServerConfigSummary;
+  config_summary: ConnectionConfig;
 }
 
-export interface DashboardServersResponse {
-  servers: DashboardServer[];
-  empty_state?: DashboardEmptyState;
-}
-
-export interface DashboardTool {
+export interface Tool {
   name: string;
+  /** `<server>__<tool>`, the name agents call. */
   canonical_name: string;
+  title: string;
   server: string;
   description: string;
   enabled: boolean;
   server_enabled: boolean;
-  input_schema?: Record<string, unknown>;
-  input_preview?: string;
-  transport?: string;
-  server_status?: string;
-  annotation_keys?: string[];
+  input_schema?: { properties?: Record<string, unknown>; required?: string[] };
 }
 
-export interface DashboardToolsResponse {
-  tools: DashboardTool[];
-  empty_state?: DashboardEmptyState;
-}
-
-export interface DashboardToolGroupTool {
+export interface Prompt {
   name: string;
   canonical_name: string;
-  server: string;
-  description?: string;
-}
-
-export interface DashboardToolGroup {
-  name: string;
-  description?: string;
-  tool_count: number;
-  tools: DashboardToolGroupTool[];
-  streamable_http_endpoint: string;
-  sse_endpoint: string;
-  sse_message_endpoint: string;
-}
-
-export interface DashboardToolGroupsResponse {
-  tool_groups: DashboardToolGroup[];
-  empty_state?: DashboardEmptyState;
-}
-
-export interface DashboardPrompt {
-  name: string;
-  canonical_name: string;
+  title: string;
   server: string;
   description: string;
   enabled: boolean;
   server_enabled: boolean;
-  arguments?: Array<Record<string, unknown>>;
-  arguments_preview?: string;
-  transport?: string;
-  server_status?: string;
+  arguments?: Array<{ name?: string; required?: boolean }>;
 }
 
-export interface DashboardPromptsResponse {
-  prompts: DashboardPrompt[];
-  empty_state?: DashboardEmptyState;
-}
-
-export interface DashboardResource {
+export interface Resource {
   uri: string;
   name: string;
   server: string;
   description: string;
   mime_type?: string;
-  enabled: boolean;
-  transport?: string;
-  server_status?: string;
 }
 
-export interface DashboardResourcesResponse {
-  resources: DashboardResource[];
-  empty_state?: DashboardEmptyState;
+/** A tool group: an endpoint that serves only the tools it selects. */
+export interface ToolSet {
+  name: string;
+  description?: string;
+  included_tools: string[];
+  included_servers: string[];
+  excluded_tools: string[];
+  tool_count: number;
+  /** What the selection resolves to now. */
+  tools: Array<{ canonical_name: string; server: string }>;
 }
 
-export interface DashboardDiagnosticsResponse {
+export interface ToolSetInput {
+  description: string;
+  tools: string[];
+  servers: string[];
+  excluded_tools: string[];
+}
+
+export interface Diagnostics {
   version: string;
   mode: string;
   config_source?: string;
-  config_path?: string;
   database: string;
-  enabled_transports: string[];
   metrics_endpoint?: string;
-  primary_endpoint: string;
-  troubleshooting_hints: string[];
   server_count: number;
   tool_count: number;
   prompt_count: number;
   resource_count: number;
-  empty_state?: DashboardEmptyState;
 }
 
-export interface DashboardRegisterServerInput {
+export interface NewConnection {
   name: string;
-  transport: "stdio" | "streamable_http" | "sse";
+  transport: Transport;
   description?: string;
   url?: string;
   bearer_token?: string;
@@ -163,33 +101,22 @@ export interface DashboardRegisterServerInput {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
-  session_mode?: "stateless" | "stateful";
+  session_mode: SessionMode;
 }
 
-export interface DashboardCreateToolGroupInput {
-  name: string;
-  description?: string;
-  tools: string[];
-}
-
-export interface DashboardOAuthAuthorizationRequired {
+export interface OAuthRequired {
   session_id: string;
   authorization_url: string;
   expires_at: string;
 }
 
-export interface DashboardRegisterServerResponse {
+export interface AddConnectionResult {
   name?: string;
-  transport?: string;
-  enabled?: boolean;
-  description?: string;
-  authorization_required?: DashboardOAuthAuthorizationRequired;
+  authorization_required?: OAuthRequired;
 }
 
-export interface DashboardOAuthSessionResponse {
-  session_id: string;
+export interface OAuthSession {
   status: "pending" | "completed" | "failed" | "expired";
   server_name?: string;
-  expires_at?: string;
   error?: string;
 }

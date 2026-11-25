@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -10,10 +11,36 @@ import (
 	"github.com/mcpjungle/mcpjungle/pkg/types"
 )
 
-type dashboardToolGroupCreateRequest struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Tools       []string `json:"tools"`
+// dashboardToolGroupRequest is a tool set as the dashboard edits it: whole
+// servers, single tools, and tools excluded from those servers. Name is read
+// on create only; an update takes the name from the path.
+type dashboardToolGroupRequest struct {
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Tools         []string `json:"tools"`
+	Servers       []string `json:"servers"`
+	ExcludedTools []string `json:"excluded_tools"`
+}
+
+func (r dashboardToolGroupRequest) toModel(name string) *model.ToolGroup {
+	return &model.ToolGroup{
+		Name:            name,
+		Description:     r.Description,
+		IncludedTools:   jsonList(r.Tools),
+		IncludedServers: jsonList(r.Servers),
+		ExcludedTools:   jsonList(r.ExcludedTools),
+	}
+}
+
+// jsonList encodes an empty list as [], never null, because UpdateToolGroup
+// saves with GORM Updates, which skips nil fields and would keep a list the
+// operator just cleared.
+func jsonList(values []string) []byte {
+	if values == nil {
+		values = []string{}
+	}
+	encoded, _ := json.Marshal(values) // a []string always encodes
+	return encoded
 }
 
 type dashboardToolGroupTool struct {
@@ -24,8 +51,13 @@ type dashboardToolGroupTool struct {
 }
 
 type dashboardToolGroup struct {
-	Name                   string                   `json:"name"`
-	Description            string                   `json:"description,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// IncludedTools, IncludedServers and ExcludedTools are the selection as
+	// stored; Tools is what it resolves to now.
+	IncludedTools          []string                 `json:"included_tools"`
+	IncludedServers        []string                 `json:"included_servers"`
+	ExcludedTools          []string                 `json:"excluded_tools"`
 	ToolCount              int                      `json:"tool_count"`
 	Tools                  []dashboardToolGroupTool `json:"tools"`
 	StreamableHTTPEndpoint string                   `json:"streamable_http_endpoint"`
@@ -93,23 +125,13 @@ func (s *Server) dashboardGetToolGroupHandler() gin.HandlerFunc {
 
 func (s *Server) dashboardCreateToolGroupHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var input dashboardToolGroupCreateRequest
+		var input dashboardToolGroupRequest
 		if err := c.ShouldBindJSON(&input); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
-		includedTools, err := json.Marshal(input.Tools)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tools payload"})
-			return
-		}
-
-		group := &model.ToolGroup{
-			Name:          input.Name,
-			Description:   input.Description,
-			IncludedTools: includedTools,
-		}
+		group := input.toModel(input.Name)
 		if err := s.toolGroupService.CreateToolGroup(group); err != nil {
 			handleServiceError(c, err)
 			return
@@ -124,6 +146,34 @@ func (s *Server) dashboardCreateToolGroupHandler() gin.HandlerFunc {
 	}
 }
 
+func (s *Server) dashboardUpdateToolGroupHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input dashboardToolGroupRequest
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		name := c.Param("name")
+		if _, err := s.toolGroupService.UpdateToolGroup(name, input.toModel(name)); err != nil {
+			handleServiceError(c, err)
+			return
+		}
+
+		updated, err := s.toolGroupService.GetToolGroup(name)
+		if err != nil {
+			handleServiceError(c, err)
+			return
+		}
+		resp, err := s.buildDashboardToolGroup(c, *updated)
+		if err != nil {
+			handleServiceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
 func (s *Server) dashboardDeleteToolGroupHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := s.toolGroupService.DeleteToolGroup(c.Param("name")); err != nil {
@@ -135,10 +185,23 @@ func (s *Server) dashboardDeleteToolGroupHandler() gin.HandlerFunc {
 }
 
 func (s *Server) buildDashboardToolGroup(c *gin.Context, group model.ToolGroup) (dashboardToolGroup, error) {
+	includedTools, err := group.GetTools()
+	if err != nil {
+		return dashboardToolGroup{}, err
+	}
+	includedServers, err := group.GetServers()
+	if err != nil {
+		return dashboardToolGroup{}, err
+	}
+	excludedTools, err := group.GetExcludedTools()
+	if err != nil {
+		return dashboardToolGroup{}, err
+	}
 	toolNames, err := group.ResolveEffectiveTools(s.mcpService)
 	if err != nil {
 		return dashboardToolGroup{}, err
 	}
+	sort.Strings(toolNames)
 
 	tools := make([]dashboardToolGroupTool, 0, len(toolNames))
 	for _, toolName := range toolNames {
@@ -169,10 +232,21 @@ func (s *Server) buildDashboardToolGroup(c *gin.Context, group model.ToolGroup) 
 	return dashboardToolGroup{
 		Name:                   group.Name,
 		Description:            group.Description,
+		IncludedTools:          orEmpty(includedTools),
+		IncludedServers:        orEmpty(includedServers),
+		ExcludedTools:          orEmpty(excludedTools),
 		ToolCount:              len(tools),
 		Tools:                  tools,
 		StreamableHTTPEndpoint: endpoints.StreamableHTTPEndpoint,
 		SSEEndpoint:            endpoints.SSEEndpoint,
 		SSEMessageEndpoint:     endpoints.SSEMessageEndpoint,
 	}, nil
+}
+
+// orEmpty keeps a stored "null" list from reaching the dashboard as null.
+func orEmpty(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }

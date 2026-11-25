@@ -7,18 +7,6 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/model"
 )
 
-func (s *Server) dashboardOverviewHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		mode := c.MustGet("mode").(model.ServerMode)
-		resp, err := s.dashboardService.Overview(mode, requestBaseURL(c))
-		if err != nil {
-			handleServiceError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, resp)
-	}
-}
-
 func (s *Server) dashboardServersHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		resp, err := s.dashboardService.Servers()

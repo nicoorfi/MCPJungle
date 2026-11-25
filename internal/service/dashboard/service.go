@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
@@ -24,55 +25,13 @@ func NewService(db *gorm.DB, metricsEnabled bool) *Service {
 
 type serverInventory struct {
 	model.McpServer
-	// Total counts reflect everything discovered from the upstream server, even if
+	// Counts reflect everything discovered from the upstream server, even if
 	// the server or individual entity is currently disabled for proxy exposure.
-	ToolCount     int
-	PromptCount   int
-	ResourceCount int
-	// Active counts reflect what is currently exposed through MCPJungle after
-	// applying both server-level and entity-level enabled flags.
-	ActiveToolCount     int
-	ActivePromptCount   int
-	ActiveResourceCount int
-	LastEntitySeen      time.Time
-}
-
-// Overview returns the high-level counts and endpoint hints shown in the
-// dashboard header/cards. These counts intentionally reflect discovered totals
-// rather than only currently enabled entities.
-func (s *Service) Overview(mode model.ServerMode, baseURL string) (*types.DashboardOverviewResponse, error) {
-	inventory, err := s.loadServerInventory()
-	if err != nil {
-		return nil, err
-	}
-
-	toolCount, promptCount, resourceCount, err := s.loadDiscoveredEntityCounts()
-	if err != nil {
-		return nil, err
-	}
-
-	status := types.DashboardStatusRunning
-	troubleshooting := collectTroubleshootingHints(inventory, toolCount, promptCount, resourceCount)
-	if len(inventory) > 0 && hasDiscoveryGap(inventory) {
-		status = types.DashboardStatusDegraded
-	}
-
-	resp := &types.DashboardOverviewResponse{
-		Status:          status,
-		Mode:            string(mode),
-		Version:         version.GetVersion(),
-		Endpoints:       buildEndpoints(baseURL),
-		ServerCount:     len(inventory),
-		ToolCount:       toolCount,
-		PromptCount:     promptCount,
-		ResourceCount:   resourceCount,
-		Troubleshooting: troubleshooting,
-	}
-	if len(inventory) == 0 {
-		resp.EmptyState = noServersEmptyState()
-	}
-
-	return resp, nil
+	ToolCount        int
+	EnabledToolCount int
+	PromptCount      int
+	ResourceCount    int
+	LastEntitySeen   time.Time
 }
 
 // Servers returns the full server inventory with sanitized configuration
@@ -92,8 +51,8 @@ func (s *Service) Servers() (*types.DashboardServersResponse, error) {
 			Name:              inv.Name,
 			Transport:         string(inv.Transport),
 			Enabled:           inv.Enabled,
-			Status:            deriveServerStatus(inv),
 			ToolCount:         inv.ToolCount,
+			EnabledToolCount:  inv.EnabledToolCount,
 			PromptCount:       inv.PromptCount,
 			ResourceCount:     inv.ResourceCount,
 			LastDiscoveredAt:  formatTime(inv.LastEntitySeen),
@@ -121,9 +80,12 @@ func (s *Service) Tools() (*types.DashboardToolsResponse, error) {
 	}
 	for _, tool := range tools {
 		canonicalName := mergeServerName(tool.Server.Name, tool.Name, "__")
+		annotations := decodeJSONMap(tool.Annotations)
+		upstreamTitle, _ := annotations["title"].(string)
 		resp.Tools = append(resp.Tools, types.DashboardTool{
 			Name:           tool.Name,
 			CanonicalName:  canonicalName,
+			Title:          displayTitle(tool.Server.Name, tool.Name, upstreamTitle),
 			Server:         tool.Server.Name,
 			Description:    tool.Description,
 			Enabled:        tool.Enabled,
@@ -131,8 +93,7 @@ func (s *Service) Tools() (*types.DashboardToolsResponse, error) {
 			InputSchema:    decodeJSONMap(tool.InputSchema),
 			InputPreview:   compactJSON(tool.InputSchema),
 			Transport:      string(tool.Server.Transport),
-			ServerStatus:   string(deriveServerStatusFromCounts(tool.Server.Transport, 1, 0, 0)),
-			AnnotationKeys: sortedKeys(decodeJSONMap(tool.Annotations)),
+			AnnotationKeys: sortedKeys(annotations),
 		})
 	}
 	if len(resp.Tools) == 0 {
@@ -163,6 +124,7 @@ func (s *Service) Prompts() (*types.DashboardPromptsResponse, error) {
 		resp.Prompts = append(resp.Prompts, types.DashboardPrompt{
 			Name:             prompt.Name,
 			CanonicalName:    mergeServerName(prompt.Server.Name, prompt.Name, "__"),
+			Title:            displayTitle(prompt.Server.Name, prompt.Name, ""),
 			Server:           prompt.Server.Name,
 			Description:      prompt.Description,
 			Enabled:          prompt.Enabled,
@@ -170,7 +132,6 @@ func (s *Service) Prompts() (*types.DashboardPromptsResponse, error) {
 			Arguments:        arguments,
 			ArgumentsPreview: compactJSONArray(arguments),
 			Transport:        string(prompt.Server.Transport),
-			ServerStatus:     string(deriveServerStatusFromCounts(prompt.Server.Transport, 0, 1, 0)),
 		})
 	}
 	if len(resp.Prompts) == 0 {
@@ -197,14 +158,13 @@ func (s *Service) Resources() (*types.DashboardResourcesResponse, error) {
 	}
 	for _, resource := range resources {
 		resp.Resources = append(resp.Resources, types.DashboardResource{
-			URI:          resource.URI,
-			Name:         resource.Name,
-			Server:       resource.Server.Name,
-			Description:  resource.Description,
-			MIMEType:     resource.MIMEType,
-			Enabled:      resource.Enabled,
-			Transport:    string(resource.Server.Transport),
-			ServerStatus: string(deriveServerStatusFromCounts(resource.Server.Transport, 0, 0, 1)),
+			URI:         resource.URI,
+			Name:        resource.Name,
+			Server:      resource.Server.Name,
+			Description: resource.Description,
+			MIMEType:    resource.MIMEType,
+			Enabled:     resource.Enabled,
+			Transport:   string(resource.Server.Transport),
 		})
 	}
 	if len(resp.Resources) == 0 {
@@ -255,9 +215,7 @@ func (s *Service) Diagnostics(mode model.ServerMode, baseURL string) (*types.Das
 	return resp, nil
 }
 
-// loadServerInventory builds the server rows used throughout the dashboard. It
-// tracks both discovered totals and "active" counts so the UI can distinguish
-// between registered/discovered state and current proxy exposure state.
+// loadServerInventory builds the server rows used throughout the dashboard.
 func (s *Service) loadServerInventory() ([]serverInventory, error) {
 	var servers []model.McpServer
 	if err := s.db.Order("name asc").Find(&servers).Error; err != nil {
@@ -276,38 +234,20 @@ func (s *Service) loadServerInventory() ([]serverInventory, error) {
 	if err != nil {
 		return nil, err
 	}
-	activeToolCounts, err := groupedEnabledCounts[model.Tool](s.db)
-	if err != nil {
-		return nil, err
-	}
-	activePromptCounts, err := groupedEnabledCounts[model.Prompt](s.db)
-	if err != nil {
-		return nil, err
-	}
-	activeResourceCounts, err := groupedEnabledCounts[model.Resource](s.db)
+	enabledToolCounts, err := groupedEnabledCounts[model.Tool](s.db)
 	if err != nil {
 		return nil, err
 	}
 
 	inventory := make([]serverInventory, 0, len(servers))
 	for _, server := range servers {
-		activeToolCount := activeToolCounts[server.ID]
-		activePromptCount := activePromptCounts[server.ID]
-		activeResourceCount := activeResourceCounts[server.ID]
-		if !server.Enabled {
-			activeToolCount = 0
-			activePromptCount = 0
-			activeResourceCount = 0
-		}
 		inventory = append(inventory, serverInventory{
-			McpServer:           server,
-			ToolCount:           toolCounts[server.ID],
-			PromptCount:         promptCounts[server.ID],
-			ResourceCount:       resourceCounts[server.ID],
-			ActiveToolCount:     activeToolCount,
-			ActivePromptCount:   activePromptCount,
-			ActiveResourceCount: activeResourceCount,
-			LastEntitySeen:      server.UpdatedAt,
+			McpServer:        server,
+			ToolCount:        toolCounts[server.ID],
+			EnabledToolCount: enabledToolCounts[server.ID],
+			PromptCount:      promptCounts[server.ID],
+			ResourceCount:    resourceCounts[server.ID],
+			LastEntitySeen:   server.UpdatedAt,
 		})
 	}
 	return inventory, nil
@@ -335,24 +275,6 @@ func (s *Service) loadEntityCounts() (int, int, int, error) {
 		Joins("JOIN mcp_servers ON mcp_servers.id = resources.server_id").
 		Where("resources.enabled = ? AND mcp_servers.enabled = ?", true, true).
 		Count(&resourceCount).Error; err != nil {
-		return 0, 0, 0, err
-	}
-	return int(toolCount), int(promptCount), int(resourceCount), nil
-}
-
-// loadDiscoveredEntityCounts returns raw discovered totals from the database
-// without considering enabled/disabled state.
-func (s *Service) loadDiscoveredEntityCounts() (int, int, int, error) {
-	var toolCount int64
-	if err := s.db.Model(&model.Tool{}).Count(&toolCount).Error; err != nil {
-		return 0, 0, 0, err
-	}
-	var promptCount int64
-	if err := s.db.Model(&model.Prompt{}).Count(&promptCount).Error; err != nil {
-		return 0, 0, 0, err
-	}
-	var resourceCount int64
-	if err := s.db.Model(&model.Resource{}).Count(&resourceCount).Error; err != nil {
 		return 0, 0, 0, err
 	}
 	return int(toolCount), int(promptCount), int(resourceCount), nil
@@ -394,21 +316,6 @@ func groupedEnabledCounts[T any](db *gorm.DB) (map[uint]int, error) {
 		counts[row.ServerID] = row.Count
 	}
 	return counts, nil
-}
-
-func deriveServerStatus(inv serverInventory) types.DashboardServerStatus {
-	return deriveServerStatusFromCounts(inv.Transport, inv.ActiveToolCount, inv.ActivePromptCount, inv.ActiveResourceCount)
-}
-
-func deriveServerStatusFromCounts(transport types.McpServerTransport, toolCount, promptCount, resourceCount int) types.DashboardServerStatus {
-	total := toolCount + promptCount + resourceCount
-	if total == 0 {
-		return types.DashboardServerStatusUnknown
-	}
-	if transport == types.TransportStdio {
-		return types.DashboardServerStatusConnected
-	}
-	return types.DashboardServerStatusReachable
 }
 
 // summarizeServerConfig produces a UI-safe description of transport-specific
@@ -480,17 +387,6 @@ func buildServerCommand(command string, args []string) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-// buildEndpoints returns the global MCPJungle endpoints shown in overview/header
-// UI. It is based on the incoming request URL so forwarded hosts/protocols are
-// reflected correctly.
-func buildEndpoints(baseURL string) []types.DashboardEndpoint {
-	root := strings.TrimRight(baseURL, "/")
-	return []types.DashboardEndpoint{
-		{Label: "Primary MCP endpoint", URL: root + "/mcp"},
-		{Label: "SSE endpoint", URL: root + "/sse"},
-	}
-}
-
 func collectTroubleshootingHints(inventory []serverInventory, toolCount, promptCount, resourceCount int) []string {
 	hints := []string{}
 	if len(inventory) == 0 {
@@ -504,15 +400,6 @@ func collectTroubleshootingHints(inventory []serverInventory, toolCount, promptC
 	}
 	hints = append(hints, "Check CLI logs for detailed errors")
 	return hints
-}
-
-func hasDiscoveryGap(inventory []serverInventory) bool {
-	for _, inv := range inventory {
-		if inv.ToolCount == 0 && inv.PromptCount == 0 && inv.ResourceCount == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func noServersEmptyState() *types.DashboardEmptyState {
@@ -660,4 +547,80 @@ func mergeServerName(serverName, itemName, separator string) string {
 		return itemName
 	}
 	return serverName + separator + itemName
+}
+
+// displayTitle returns the name a person reads for a tool or prompt: the
+// upstream's own title when it sets one, else the item name in sentence case
+// with a leading server prefix dropped, so "asana_get_task" on server "asana"
+// reads "Get task". Acronyms such as "LLM" keep their case.
+func displayTitle(serverName, itemName, upstreamTitle string) string {
+	if title := strings.TrimSpace(upstreamTitle); title != "" {
+		return title
+	}
+
+	name := itemName
+	if n := len(serverName); n > 0 && len(name) > n+1 &&
+		strings.EqualFold(name[:n], serverName) && (name[n] == '_' || name[n] == '-') {
+		name = name[n+1:]
+	}
+
+	words := splitWords(name)
+	if len(words) == 0 {
+		return itemName
+	}
+	for i, word := range words {
+		if !isAcronym(word) {
+			word = strings.ToLower(word)
+		}
+		if i == 0 {
+			runes := []rune(word)
+			runes[0] = unicode.ToUpper(runes[0])
+			word = string(runes)
+		}
+		words[i] = word
+	}
+	return strings.Join(words, " ")
+}
+
+// splitWords splits snake_case, kebab-case, dotted and camelCase names into
+// words. An upper-case run stays one word ("sampleLLM" -> "sample", "LLM").
+func splitWords(name string) []string {
+	runes := []rune(name)
+	var words []string
+	var current []rune
+	flush := func() {
+		if len(current) > 0 {
+			words = append(words, string(current))
+			current = nil
+		}
+	}
+	for i, r := range runes {
+		if r == '_' || r == '-' || r == '.' || r == '/' || unicode.IsSpace(r) {
+			flush()
+			continue
+		}
+		if unicode.IsUpper(r) && len(current) > 0 {
+			prev := runes[i-1]
+			nextIsLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) || (unicode.IsUpper(prev) && nextIsLower) {
+				flush()
+			}
+		}
+		current = append(current, r)
+	}
+	flush()
+	return words
+}
+
+func isAcronym(word string) bool {
+	letters := 0
+	for _, r := range word {
+		if unicode.IsLower(r) {
+			return false
+		}
+		if unicode.IsLetter(r) {
+			letters++
+		}
+	}
+	return letters >= 2
 }

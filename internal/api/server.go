@@ -359,7 +359,6 @@ func (s *Server) setupRouter() (*gin.Engine, error) {
 			requireDashboardMode,
 		)
 		{
-			dashboardAPI.GET("/overview", s.dashboardOverviewHandler())
 			dashboardAPI.GET("/servers", s.dashboardServersHandler())
 			dashboardAPI.POST("/servers", s.dashboardRegisterServerHandler())
 			dashboardAPI.GET("/oauth/callback", s.dashboardOAuthCallbackHandler())
@@ -371,6 +370,7 @@ func (s *Server) setupRouter() (*gin.Engine, error) {
 			dashboardAPI.GET("/tool-groups", s.dashboardToolGroupsHandler())
 			dashboardAPI.POST("/tool-groups", s.dashboardCreateToolGroupHandler())
 			dashboardAPI.GET("/tool-groups/:name", s.dashboardGetToolGroupHandler())
+			dashboardAPI.PUT("/tool-groups/:name", s.dashboardUpdateToolGroupHandler())
 			dashboardAPI.DELETE("/tool-groups/:name", s.dashboardDeleteToolGroupHandler())
 			dashboardAPI.GET("/prompts", s.dashboardPromptsHandler())
 			dashboardAPI.PATCH("/prompts/:name/enabled", s.dashboardSetPromptEnabledHandler())

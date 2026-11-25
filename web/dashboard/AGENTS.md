@@ -4,13 +4,15 @@ Read the [root guide](../../AGENTS.md) as well. This directory contains the deve
 
 ## Source map and conventions
 
-- `src/App.tsx`: sections, tables, forms, and local UI state.
-- `src/components/`: shared UI, including navigation and copy buttons.
-- `src/lib/api.ts`: dashboard API helpers; `src/lib/types.ts`: frontend contracts.
-- `src/styles.css`: shared styling; `vite.config.ts`: aliases, build output, and local API proxy.
-- Follow existing React patterns and strict TypeScript settings. Reuse components and helpers before adding dependencies, a router, or a new state-management system.
-- Keep the compact developer-oriented UI: restrained colors and borders, readable tables, monospace identifiers, nearby copy actions, and expandable details. Use structured fields before raw JSON; keep debug JSON collapsed.
-- Preserve accessible labels, focus/keyboard behavior, loading/empty states, and visible mutation errors when adding interactions.
+- `src/App.tsx`: shell (wordmark, two destinations, footer) and the route switch.
+- `src/screens/`: one file per screen; each fetches only what it shows and owns its loading and error state.
+- `src/components/`: shared UI (`ui.tsx`), form fields, the native `<dialog>` wrapper and the add-connection dialog with its OAuth flow.
+- `src/lib/`: API helpers and contracts (`api.ts`, `types.ts`), hash routes (`route.ts`), `useFetch`/`invalidate`, the toast, and the tool set selection model (`selection.ts`).
+- `src/styles.css`: the design tokens and all styling; pick from its scales.
+- The UI says connection, tool set, Pause/Resume and "available to agents"; the API says server and tool group. `types.ts` is where the two meet.
+- Follow strict TypeScript. Reuse components and helpers before adding dependencies, a router, or a state library.
+- Keep secondary detail one level down (disclosures), monospace only for values an operator copies, and visible mutation errors next to the action.
+- Preserve accessible labels, focus and keyboard behavior, loading and empty states.
 
 ## Local development and embedding
 
@@ -44,13 +46,13 @@ go run . start --host 127.0.0.1
 
 ## Validation
 
-From this directory, run `npm run typecheck`. From the repository root, run:
+From this directory, run `npm run typecheck` and `npm test` (Node's test runner over `src/lib/*.test.ts`). From the repository root, run:
 
 ```bash
 bash ./scripts/build-dashboard.sh
-go test ./internal/api ./internal/e2e
+go test ./internal/api ./internal/e2e ./internal/service/dashboard
 ```
 
-The build script also typechecks through `npm run build`. There are currently no frontend `test` or `lint` scripts; use the actual scripts in `package.json`.
+The build script also typechecks through `npm run build`. There is no frontend `lint` script; use the actual scripts in `package.json`.
 
 For UI changes, inspect the affected interaction in the browser, including errors and empty states. Verify the embedded UI on port 8080 as well as Vite when the build/serving path is relevant. Backend tests alone do not verify visual or browser behavior. Run relevant MCP service tests for registration/OAuth changes and broader checks per the root guide; report any checks you could not run.

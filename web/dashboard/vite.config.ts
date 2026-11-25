@@ -7,14 +7,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "@repo-assets": path.resolve(__dirname, "../../assets"),
     },
   },
   server: {
     port: 5173,
-    fs: {
-      allow: [path.resolve(__dirname, "../..")],
-    },
     proxy: {
       "/api": "http://localhost:8080",
     },
