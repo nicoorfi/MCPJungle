@@ -113,6 +113,7 @@ test("a custom install falls back to its name; anything else keeps the letter", 
   assert.equal(brandFor(connection("Asana", everything))?.id, "asana");
   assert.equal(brandFor(connection("google", everything))?.id, "google");
   assert.equal(brandFor(connection("whatsapp", everything))?.id, "whatsapp");
+  assert.equal(brandFor(connection("telegram", everything))?.id, "telegram");
   assert.equal(brandFor(connection("everything", everything)), undefined);
   assert.equal(brandFor(connection("fetcher", { kind: "stdio", command: "npx", target: "npx mcp-server-fetch" })), undefined);
 });
