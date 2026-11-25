@@ -10,11 +10,15 @@ The Dashboard UI is served by the MCPJungle Go server at `/` in development mode
 
 - Frontend app root: web/dashboard
 - Main React entry: web/dashboard/src/main.tsx
-- Main app component: web/dashboard/src/App.tsx
-- Shared components: web/dashboard/src/components
+- App shell (header, routes, footer): web/dashboard/src/App.tsx
+- One file per screen: web/dashboard/src/screens
+- Shared UI, form fields and the add-connection dialog: web/dashboard/src/components
 - API helpers: web/dashboard/src/lib/api.ts
-- Frontend types: web/dashboard/src/lib/types.ts
-- Global styles: web/dashboard/src/styles.css
+- Frontend types: web/dashboard/src/lib/types.ts (the API's servers and tool groups are connections and tool sets in the UI)
+- Hash routes: web/dashboard/src/lib/route.ts
+- Data loading: web/dashboard/src/lib/useFetch.ts
+- Tool set selection model and its test: web/dashboard/src/lib/selection.ts, selection.test.ts
+- Global styles and tokens: web/dashboard/src/styles.css
 
 ### Stack
 
@@ -85,10 +89,13 @@ The frontend calls dashboard APIs with `fetch("/api/dashboard/...")` through the
 
 ### Routing model in the frontend
 
-The dashboard is a single React app with section-state navigation. It does not use React Router today.
+The dashboard is a single React app with hash routes and no router dependency, so a reload or the back button keeps the screen:
 
-- Sidebar items are defined in web/dashboard/src/components/NavSidebar.tsx
-- Active page state is controlled in web/dashboard/src/App.tsx
+- `#/connections` and `#/connections/:name`
+- `#/sets`, `#/sets/:name` and `#/new-set`
+- `#/system`
+
+web/dashboard/src/lib/route.ts parses the hash; web/dashboard/src/App.tsx renders the matching screen. Each screen fetches only what it shows through `useFetch` and owns its loading and error state. After a mutation, `invalidate()` refetches every mounted screen.
 
 So for the Go server, the important UI entrypoint is `/`.
 
@@ -283,7 +290,7 @@ or `SERVER_MODE=enterprise`, dashboard UI routes and dashboard API routes return
 
 ### Frontend fallback routing
 
-There is no multi-route SPA fallback setup today because the dashboard currently uses a single entrypoint and in-app section switching instead of browser URL routing.
+No SPA fallback is needed: routes live in the URL hash, so the Go server only serves `/`.
 
 ## 6. Dashboard backend APIs
 
@@ -302,7 +309,6 @@ Handlers live in:
 
 #### Read endpoints
 
-- `GET /api/dashboard/overview`
 - `GET /api/dashboard/servers`
 - `GET /api/dashboard/tools`
 - `GET /api/dashboard/tool-groups`
@@ -319,7 +325,10 @@ Handlers live in:
 - `PATCH /api/dashboard/tools/:name/enabled`
 - `PATCH /api/dashboard/prompts/:name/enabled`
 - `POST /api/dashboard/tool-groups`
+- `PUT /api/dashboard/tool-groups/:name`
 - `DELETE /api/dashboard/tool-groups/:name`
+
+Tool group create and update take `description`, `tools`, `servers` and `excluded_tools`, and responses return the stored `included_tools`, `included_servers` and `excluded_tools` beside the resolved `tools`.
 
 #### OAuth flow endpoints
 
@@ -342,7 +351,7 @@ Typical steps:
 4. Add/extend response types in pkg/types or local dashboard response structs if the API is dashboard-specific.
 5. Add frontend types in web/dashboard/src/lib/types.ts.
 6. Add a frontend helper in web/dashboard/src/lib/api.ts.
-7. Update the UI in web/dashboard/src/App.tsx.
+7. Update the screen that shows it in web/dashboard/src/screens.
 8. Add tests in `internal/api` or `internal/e2e`.
 
 ### Error handling
@@ -388,7 +397,7 @@ The browser frontend cannot do that, so the dashboard uses the MCPJungle Go serv
 
 ### Current dashboard OAuth flow
 
-1. User submits `+ Add Server` in the dashboard.
+1. User submits `Add connection` in the dashboard.
 2. Backend tries normal registration in internal/api/dashboard_mutations.go.
 3. If upstream OAuth is required, backend retries registration with:
 
@@ -414,7 +423,7 @@ The browser frontend cannot do that, so the dashboard uses the MCPJungle Go serv
 ```
 
 8. Backend completes the upstream OAuth session.
-9. Frontend sees completion via polling, closes the modal flow, and refreshes dashboard data.
+9. Frontend sees completion via polling, shows what the connection offers, and refreshes dashboard data.
 
 ### Important implementation files
 
@@ -422,7 +431,7 @@ The browser frontend cannot do that, so the dashboard uses the MCPJungle Go serv
 - Dashboard registration entrypoint: internal/api/dashboard_mutations.go
 - Dashboard callback + polling: internal/api/dashboard_oauth.go
 - Upstream OAuth service logic: internal/service/mcp/upstream_oauth.go
-- Frontend registration modal: web/dashboard/src/App.tsx
+- Frontend registration dialog: web/dashboard/src/components/AddConnectionDialog.tsx
 - Frontend API helpers: web/dashboard/src/lib/api.ts
 
 ### Important constraints
@@ -433,106 +442,43 @@ The browser frontend cannot do that, so the dashboard uses the MCPJungle Go serv
 
 ## 8. Common frontend tasks
 
-### Add a new sidebar page
+### Add a screen
 
-- Add the section key/type in web/dashboard/src/lib/types.ts
-- Add the sidebar item in web/dashboard/src/components/NavSidebar.tsx
-- Add the section title/meta and render branch in web/dashboard/src/App.tsx
-- If the page needs backend data, add an API helper in web/dashboard/src/lib/api.ts
+- Add the route to `Route`, `href` and `parseRoute` in web/dashboard/src/lib/route.ts
+- Add the screen file in web/dashboard/src/screens and its branch in `Screen` in web/dashboard/src/App.tsx
+- Fetch with `useFetch` and render through `Async`, so the screen owns its loading and error state
 
-### Add a new dashboard API call
+### Add a dashboard API call
 
 - Backend route: internal/api/server.go
 - Backend handler: `internal/api/dashboard*.go`
 - Frontend helper: web/dashboard/src/lib/api.ts
 - Frontend response type: web/dashboard/src/lib/types.ts
 
-### Add a new table column
+### Add a button or action
 
-- UI rendering usually lives directly in web/dashboard/src/App.tsx
-- Styling usually goes in web/dashboard/src/styles.css
-- If the data is not already in the response, add it to the dashboard API response first
+- Call the API helper, patch the loaded data with the second value `useFetch` returns, then call `invalidate()`
+- Show a mutation error next to the action; use `notify()` only when the action leaves the screen (a create or delete)
+- Delete actions confirm through `DeleteDialog` in web/dashboard/src/components/Dialog.tsx
 
-### Add a new button or action
+### Add a copyable value
 
-- UI button: web/dashboard/src/App.tsx
-- API call: web/dashboard/src/lib/api.ts
-- Backend mutation handler: internal/api/dashboard_mutations.go or internal/api/dashboard_tool_groups.go
+Reuse `CopyValue` in web/dashboard/src/components/ui.tsx. It keeps the copy button beside the value and selects the text when the clipboard is unavailable.
 
-### Add a new expanded row/details panel
+### Add a form or dialog
 
-Patterns already exist on:
-
-- Tools
-- Tool Groups
-- Prompts
-- Servers
-
-Look in web/dashboard/src/App.tsx for the existing row expansion state and markup.
-
-### Add a copy button
-
-Reuse:
-
-- web/dashboard/src/components/CopyButton.tsx
-
-Keep the copy button close to the value it copies and add:
-
-- `aria-label`
-- `title`
-
-### Add a filter/search field
-
-Current filtering patterns live in web/dashboard/src/App.tsx using local React state plus derived filtered arrays.
-
-### Add a new form/modal
-
-Current examples:
-
-- server registration modal
-- tool group creation modal
-
-Both live in web/dashboard/src/App.tsx.
-
-Typical steps:
-
-1. add local form state
-2. add validation
-3. call dashboard API helper
-4. refresh dashboard data after success
-5. show inline mutation error/success feedback
+- Fields: web/dashboard/src/components/fields.tsx (visible label, hint above, error below)
+- Dialogs: `Dialog` in web/dashboard/src/components/Dialog.tsx wraps a native `<dialog>`, so Escape closes it and focus stays inside and returns to the opener
 
 ## 9. Styling and design notes
 
-Current v1 visual direction:
+The tokens at the top of web/dashboard/src/styles.css are the whole system: greys, one accent, danger, a 7px and 10px radius, one spacing scale. Light and dark follow `prefers-color-scheme`.
 
-- GitHub-like developer dashboard
-- white / very light gray backgrounds
-- subtle gray borders
-- black / dark gray text
-- green for primary actions and enabled/healthy states
-- compact rows
-
-Use monospace for:
-
-- endpoints
-- canonical names
-- transports
-- URIs
-- command strings
-
-UI guidance:
-
-- Avoid raw JSON as the default UI
-- Prefer expandable rows for detail inspection
-- Keep copy buttons close to the values they copy
-- Keep detail panels compact and scan-friendly
-
-Tools and Prompts specifically:
-
-- show human-readable schema/argument fields by default
-- raw JSON, if present, should be fallback/debug-only
-- raw JSON fallback should be collapsed by default
+- Roomy rows with a soft letter mark, a name, one quiet line and a mono count
+- Panels on a slightly shifted background instead of borders
+- Monospace only for values an operator copies: endpoints, canonical names, URIs, commands
+- Human titles for tools and prompts come from the API's `title` field
+- Rare details (transport, command, inputs) sit one level down in a disclosure
 
 ## 10. Testing and validation
 
@@ -542,10 +488,11 @@ From `web/dashboard`:
 
 ```bash
 npm run typecheck
+npm test
 npm run build
 ```
 
-There is currently no dedicated frontend lint script in web/dashboard/package.json.
+`npm test` runs the tool set selection checks with Node's built-in test runner. There is no frontend lint script.
 
 ### Backend/dashboard test commands
 
@@ -565,27 +512,16 @@ Useful test files include:
 
 ### Manual smoke-test checklist
 
-1. Start MCPJungle in dev mode and open `http://localhost:8080/`.
-2. Confirm the default page is `Servers`.
-3. Add a server.
-4. If possible, test an OAuth-required registration.
-5. Enable/disable a server.
-6. Delete a server.
-7. Enable/disable a tool.
-8. Enable/disable a prompt.
-9. Create and delete a tool group.
-10. Copy:
-    - endpoint
-    - canonical tool name
-    - canonical prompt name
-    - resource URI
-    - tool group endpoints
-11. Expand rows on:
-    - Tools
-    - Prompts
-    - Tool Groups
-12. Open `System Info`.
-13. Confirm the dashboard does not expose secrets.
+1. Start MCPJungle in dev mode with an empty database and open `http://localhost:8080/`.
+2. Confirm the empty state shows the gateway endpoint and `Add connection`.
+3. Add a local command connection; if possible, an OAuth-required remote one.
+4. On the connection page, switch a tool off and on, pause and resume.
+5. Create a tool set, edit it, and copy its endpoint.
+6. Reload on a deep link such as `#/sets/<name>` and use the back button.
+7. Press Escape in the add-connection dialog and check that focus returns to the button.
+8. Check light, dark and a 390px wide window.
+9. Delete the tool set and the connection.
+10. Confirm the dashboard does not expose secrets.
 
 ## 11. Troubleshooting
 
