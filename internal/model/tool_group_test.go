@@ -2,8 +2,10 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
+	"github.com/mcpjungle/mcpjungle/pkg/apierrors"
 	"gorm.io/datatypes"
 )
 
@@ -283,5 +285,31 @@ func TestToolGroup_ResolveEffectiveTools_EmptyGroup(t *testing.T) {
 
 	if len(result) != 0 {
 		t.Errorf("Expected 0 tools for empty group, got %d", len(result))
+	}
+}
+
+// notFoundResolver mirrors the MCP service: an unknown server is apierrors.ErrNotFound.
+type notFoundResolver struct{ mockToolResolver }
+
+func (r *notFoundResolver) ListToolsByServer(serverName string) ([]Tool, error) {
+	if tools, exists := r.serverTools[serverName]; exists {
+		return tools, nil
+	}
+	return nil, fmt.Errorf("failed to get MCP server %s from DB: %w", serverName, apierrors.ErrNotFound)
+}
+
+func TestToolGroup_ResolveEffectiveTools_DeletedServer(t *testing.T) {
+	resolver := &notFoundResolver{mockToolResolver{serverTools: map[string][]Tool{
+		"time": {{Name: "time__get_current_time"}},
+	}}}
+	servers, _ := json.Marshal([]string{"time", "deleted"})
+	group := &ToolGroup{IncludedServers: datatypes.JSON(servers)}
+
+	result, err := group.ResolveEffectiveTools(resolver)
+	if err != nil {
+		t.Fatalf("a deleted server must not break the group: %v", err)
+	}
+	if len(result) != 1 || result[0] != "time__get_current_time" {
+		t.Errorf("expected only time__get_current_time, got %v", result)
 	}
 }

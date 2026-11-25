@@ -2,7 +2,10 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+
+	"github.com/mcpjungle/mcpjungle/pkg/apierrors"
 
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -87,6 +90,10 @@ func (g *ToolGroup) ResolveEffectiveTools(mcpService ToolResolver) ([]string, er
 	}
 	for _, serverName := range includedServers {
 		serverTools, err := mcpService.ListToolsByServer(serverName)
+		if errors.Is(err, apierrors.ErrNotFound) {
+			// a deleted server contributes no tools; re-registering it brings them back
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to get tools for server %s: %w", serverName, err)
 		}

@@ -348,8 +348,8 @@ func TestCreateToolGroup_InvalidIncludedServerStillFailsFast(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected create tool group to fail for missing included server")
 	}
-	if !testhelpers.Contains(err.Error(), "failed to resolve effective tools") {
-		t.Fatalf("expected create error to mention failed resolution, got: %v", err)
+	if !errors.Is(err, apierrors.ErrInvalidInput) || !testhelpers.Contains(err.Error(), "missing-server does not exist") {
+		t.Fatalf("expected create error to name the missing server, got: %v", err)
 	}
 }
 
@@ -373,4 +373,84 @@ func TestNewSseMCPServer_AdvertisesCurrentVersion(t *testing.T) {
 		"MCPJungle proxy MCP server for SSE transport for tool group: group-a",
 		version.GetVersion(),
 	)
+}
+
+// A set that includes a whole server must accept a server with a tool excluded on its own,
+// expose only its published tools, and follow the server through pause and resume.
+func TestToolGroup_WholeServerWithExcludedTool(t *testing.T) {
+	db := setupInMemoryDB(t)
+	srv, err := model.NewStdioServer("asana", "Asana", "echo", nil, nil, "")
+	if err != nil {
+		t.Fatalf("failed to create server model: %v", err)
+	}
+	if err := db.Create(srv).Error; err != nil {
+		t.Fatalf("failed to persist server: %v", err)
+	}
+	for _, name := range []string{"get_task", "delete_task"} {
+		tool := model.Tool{ServerID: srv.ID, Name: name, InputSchema: []byte(`{"type":"object"}`), Enabled: true}
+		if err := db.Create(&tool).Error; err != nil {
+			t.Fatalf("failed to persist tool %s: %v", name, err)
+		}
+	}
+	if err := db.Model(&model.Tool{}).Where("name = ?", "delete_task").Update("enabled", false).Error; err != nil {
+		t.Fatalf("failed to exclude delete_task: %v", err)
+	}
+
+	mcpService := newTestMCPService(t, db)
+	svc, err := NewToolGroupService(db, mcpService)
+	if err != nil {
+		t.Fatalf("failed to create tool group service: %v", err)
+	}
+	group := &model.ToolGroup{Name: "inbox", IncludedServers: datatypes.JSON([]byte(`["asana"]`))}
+	if err := svc.CreateToolGroup(group); err != nil {
+		t.Fatalf("create must accept a server with an excluded tool: %v", err)
+	}
+
+	exposed := func() []string {
+		t.Helper()
+		proxy, ok := svc.GetToolGroupMCPServer("inbox")
+		if !ok {
+			t.Fatal("expected group proxy")
+		}
+		var names []string
+		for name := range proxy.ListTools() {
+			names = append(names, name)
+		}
+		return names
+	}
+	if got := exposed(); len(got) != 1 || got[0] != "asana__get_task" {
+		t.Fatalf("expected only asana__get_task, got %v", got)
+	}
+
+	if _, _, err := mcpService.DisableMcpServer("asana"); err != nil {
+		t.Fatalf("pause failed: %v", err)
+	}
+	if got := exposed(); len(got) != 0 {
+		t.Fatalf("expected no tools while paused, got %v", got)
+	}
+	if _, err := svc.UpdateToolGroup("inbox", &model.ToolGroup{
+		Description:     "edited while paused",
+		IncludedServers: datatypes.JSON([]byte(`["asana"]`)),
+	}); err != nil {
+		t.Fatalf("update must accept a paused server: %v", err)
+	}
+	if _, _, err := mcpService.EnableMcpServer("asana"); err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if got := exposed(); len(got) != 1 || got[0] != "asana__get_task" {
+		t.Fatalf("expected only asana__get_task after resume, got %v", got)
+	}
+
+	if _, err := svc.UpdateToolGroup("inbox", &model.ToolGroup{
+		IncludedServers: datatypes.JSON([]byte(`["asana"]`)),
+	}); err != nil {
+		t.Fatalf("clearing the description failed: %v", err)
+	}
+	saved, err := svc.GetToolGroup("inbox")
+	if err != nil {
+		t.Fatalf("failed to read group: %v", err)
+	}
+	if saved.Description != "" {
+		t.Fatalf("expected the description cleared, got %q", saved.Description)
+	}
 }

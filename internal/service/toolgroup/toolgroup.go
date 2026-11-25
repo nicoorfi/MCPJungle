@@ -83,6 +83,10 @@ func (s *ToolGroupService) CreateToolGroup(group *model.ToolGroup) error {
 		)
 	}
 
+	if err := s.requireServersExist(group); err != nil {
+		return err
+	}
+
 	// resolve all effective tools for this group
 	toolNames, err := group.ResolveEffectiveTools(s.mcpService)
 	if err != nil {
@@ -103,9 +107,12 @@ func (s *ToolGroupService) CreateToolGroup(group *model.ToolGroup) error {
 	// this also has a side effect of validating that the tools exist in mcpjungle.
 	// if a tool does not exist, return an error without creating the group.
 	for _, name := range toolNames {
-		tool, exists := s.mcpService.GetToolInstance(name)
-		if !exists {
-			return fmt.Errorf("tool %s does not exist or is disabled: %w", name, apierrors.ErrInvalidInput)
+		tool, published, err := s.publishedTool(name)
+		if err != nil {
+			return err
+		}
+		if !published {
+			continue
 		}
 
 		parentServer, err := s.mcpService.GetToolParentServer(name)
@@ -150,6 +157,9 @@ func (s *ToolGroupService) UpdateToolGroup(name string, updatedGroup *model.Tool
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve effective tools of original group: %w", err)
 	}
+	if err := s.requireServersExist(updatedGroup); err != nil {
+		return nil, err
+	}
 	updatedToolNames, err := updatedGroup.ResolveEffectiveTools(s.mcpService)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve effective tools of the updated group: %w", err)
@@ -176,9 +186,12 @@ func (s *ToolGroupService) UpdateToolGroup(name string, updatedGroup *model.Tool
 	// tools added to the group must be added to its MCP server instances
 	var sseToolsToAdd, normalToolsToAdd []mcpgo.Tool
 	for _, toolName := range toolsAdded {
-		tool, exists := s.mcpService.GetToolInstance(toolName)
-		if !exists {
-			return nil, fmt.Errorf("tool %s does not exist or is disabled: %w", toolName, apierrors.ErrInvalidInput)
+		tool, published, err := s.publishedTool(toolName)
+		if err != nil {
+			return nil, err
+		}
+		if !published {
+			continue
 		}
 
 		parentServer, err := s.mcpService.GetToolParentServer(toolName)
@@ -224,7 +237,10 @@ func (s *ToolGroupService) UpdateToolGroup(name string, updatedGroup *model.Tool
 
 	// ensure the group name remains unchanged in the db record
 	updatedGroup.Name = name
-	if err := s.db.Model(&model.ToolGroup{}).Where("name = ?", name).Updates(updatedGroup).Error; err != nil {
+	if err := s.db.Model(&model.ToolGroup{}).Where("name = ?", name).
+		// Select writes empty values too, so a description or list can be cleared.
+		Select("description", "included_tools", "included_servers", "excluded_tools").
+		Updates(updatedGroup).Error; err != nil {
 		return nil, fmt.Errorf("failed to update tool group in DB: %w", err)
 	}
 
@@ -352,6 +368,41 @@ func (s *ToolGroupService) deleteToolGroupMCPServers(name string) {
 	// proceed to delete both normal & sse proxies for the group, then release the locks
 	delete(s.mcpServers, name)
 	delete(s.sseMcpServers, name)
+}
+
+// requireServersExist rejects a create or update that names an unregistered server.
+// A saved group whose server was deleted later still resolves (without that server's tools).
+func (s *ToolGroupService) requireServersExist(group *model.ToolGroup) error {
+	servers, err := group.GetServers()
+	if err != nil {
+		return fmt.Errorf("failed to get included servers: %w", err)
+	}
+	for _, name := range servers {
+		if _, err := s.mcpService.GetMcpServer(name); err != nil {
+			if errors.Is(err, apierrors.ErrNotFound) {
+				return fmt.Errorf("included server %s does not exist: %w", name, apierrors.ErrInvalidInput)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// publishedTool returns the live instance of a tool a group resolves to.
+// A registered tool that is not published (disabled on its own, or its server is paused)
+// returns published=false: the group keeps selecting it, and handleToolAddition adds it
+// once it is published again. A name with no registered tool is invalid input.
+func (s *ToolGroupService) publishedTool(name string) (mcpgo.Tool, bool, error) {
+	if tool, ok := s.mcpService.GetToolInstance(name); ok {
+		return tool, true, nil
+	}
+	if _, err := s.mcpService.GetTool(name); err != nil {
+		if errors.Is(err, apierrors.ErrNotFound) {
+			return mcpgo.Tool{}, false, fmt.Errorf("tool %s does not exist: %w", name, apierrors.ErrInvalidInput)
+		}
+		return mcpgo.Tool{}, false, err
+	}
+	return mcpgo.Tool{}, false, nil
 }
 
 // initToolGroupMCPServers initializes the MCP proxy servers for all existing tool groups in the database.
