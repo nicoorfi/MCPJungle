@@ -11,6 +11,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
+	"github.com/mcpjungle/mcpjungle/pkg/apierrors"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -316,60 +317,124 @@ func TestRegisterMcpServer_RejectsInvalidNameAndURLBeforePersistence(t *testing.
 	}
 }
 
-func TestDisableEnableMcpServer_CascadesEntitiesAndSetDashboardServerEnabled(t *testing.T) {
+// Pausing a server must not overwrite the choices made on its items.
+// Rule: an item is published iff server.Enabled && item.Enabled.
+func TestPauseResumeMcpServer_KeepsItemChoices(t *testing.T) {
 	db := setupTestDBForServerLifecycle(t)
 	srv := createTestServer(t, db)
 	createTestToolRecord(t, db, srv, "echo", true)
+	createTestToolRecord(t, db, srv, "delete", false)
 	createTestPromptRecord(t, db, srv, "review", true)
-	createTestResourceRecord(t, db, srv, "resource://test/status", "status", true)
+	createTestPromptRecord(t, db, srv, "draft", false)
+	status := createTestResourceRecord(t, db, srv, "resource://test/status", "status", true)
+	secret := createTestResourceRecord(t, db, srv, "resource://test/secret", "secret", false)
 
 	service := newTestLifecycleService(t, db)
 
-	_, ok := service.GetToolInstance("test-server__echo")
-	require.True(t, ok)
+	published := func() (tools, prompts, resources []string) {
+		for name := range service.mcpProxyServer.ListTools() {
+			tools = append(tools, name)
+		}
+		for name := range service.mcpProxyServer.ListPrompts() {
+			prompts = append(prompts, name)
+		}
+		for uri := range service.mcpProxyServer.ListResources() {
+			resources = append(resources, uri)
+		}
+		return tools, prompts, resources
+	}
+	assertItemRowsUnchanged := func() {
+		t.Helper()
+		var tools []model.Tool
+		require.NoError(t, db.Order("name").Find(&tools).Error)
+		require.Len(t, tools, 2)
+		assert.Equal(t, "delete", tools[0].Name)
+		assert.False(t, tools[0].Enabled)
+		assert.True(t, tools[1].Enabled)
 
-	disabledTools, disabledPrompts, err := service.DisableMcpServer("test-server")
+		var prompts []model.Prompt
+		require.NoError(t, db.Order("name").Find(&prompts).Error)
+		require.Len(t, prompts, 2)
+		assert.Equal(t, "draft", prompts[0].Name)
+		assert.False(t, prompts[0].Enabled)
+		assert.True(t, prompts[1].Enabled)
+
+		var resources []model.Resource
+		require.NoError(t, db.Order("name").Find(&resources).Error)
+		require.Len(t, resources, 2)
+		assert.Equal(t, "secret", resources[0].Name)
+		assert.False(t, resources[0].Enabled)
+		assert.True(t, resources[1].Enabled)
+	}
+
+	tools, prompts, resources := published()
+	assert.Equal(t, []string{"test-server__echo"}, tools)
+	assert.Equal(t, []string{"test-server__review"}, prompts)
+	assert.Equal(t, []string{status.URI}, resources)
+
+	// pause
+	pausedTools, pausedPrompts, err := service.DisableMcpServer("test-server")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"test-server__echo"}, disabledTools)
-	assert.Equal(t, []string{"test-server__review"}, disabledPrompts)
+	assert.Equal(t, []string{"test-server__echo"}, pausedTools)
+	assert.Equal(t, []string{"test-server__review"}, pausedPrompts)
 
 	updatedServer, err := service.GetMcpServer("test-server")
 	require.NoError(t, err)
 	assert.False(t, updatedServer.Enabled)
+	assertItemRowsUnchanged()
 
-	var tool model.Tool
-	require.NoError(t, db.Where("server_id = ? AND name = ?", srv.ID, "echo").First(&tool).Error)
-	assert.False(t, tool.Enabled)
-
-	var prompt model.Prompt
-	require.NoError(t, db.Where("server_id = ? AND name = ?", srv.ID, "review").First(&prompt).Error)
-	assert.False(t, prompt.Enabled)
-
-	var resource model.Resource
-	require.NoError(t, db.Where("server_id = ? AND name = ?", srv.ID, "status").First(&resource).Error)
-	assert.False(t, resource.Enabled)
-
-	assert.Nil(t, service.mcpProxyServer.GetTool("test-server__echo"))
-	_, ok = service.GetToolInstance("test-server__echo")
+	tools, prompts, resources = published()
+	assert.Empty(t, tools)
+	assert.Empty(t, prompts)
+	assert.Empty(t, resources)
+	_, ok := service.GetToolInstance("test-server__echo")
 	assert.False(t, ok)
 
-	err = service.SetDashboardServerEnabled("test-server", true)
+	// a paused server refuses direct invocation
+	_, err = service.InvokeTool(context.Background(), "test-server__echo", map[string]any{})
+	require.ErrorIs(t, err, apierrors.ErrInvalidInput)
+	_, err = service.GetPromptWithArgs(context.Background(), "test-server__review", map[string]any{})
+	require.ErrorIs(t, err, apierrors.ErrInvalidInput)
+	_, err = service.ReadResource(context.Background(), status.URI)
+	require.ErrorIs(t, err, apierrors.ErrInvalidInput)
+
+	// enabling one tool while the server is paused writes its row but does not publish it
+	_, err = service.EnableTools("test-server__delete")
 	require.NoError(t, err)
+	tools, _, _ = published()
+	assert.Empty(t, tools)
+	_, err = service.DisableTools("test-server__delete")
+	require.NoError(t, err)
+
+	// startup keeps a paused server's items unpublished
+	restarted := newTestLifecycleService(t, db)
+	assert.Empty(t, restarted.mcpProxyServer.ListTools())
+	assert.Empty(t, restarted.mcpProxyServer.ListPrompts())
+	assert.Empty(t, restarted.mcpProxyServer.ListResources())
+
+	// resume through the dashboard path
+	require.NoError(t, service.SetDashboardServerEnabled("test-server", true))
 
 	updatedServer, err = service.GetMcpServer("test-server")
 	require.NoError(t, err)
 	assert.True(t, updatedServer.Enabled)
+	assertItemRowsUnchanged()
 
-	require.NoError(t, db.Where("server_id = ? AND name = ?", srv.ID, "echo").First(&tool).Error)
-	assert.True(t, tool.Enabled)
-	require.NoError(t, db.Where("server_id = ? AND name = ?", srv.ID, "review").First(&prompt).Error)
-	assert.True(t, prompt.Enabled)
-	require.NoError(t, db.Where("server_id = ? AND name = ?", srv.ID, "status").First(&resource).Error)
-	assert.True(t, resource.Enabled)
-
-	assert.NotNil(t, service.mcpProxyServer.GetTool("test-server__echo"))
+	tools, prompts, resources = published()
+	assert.Equal(t, []string{"test-server__echo"}, tools)
+	assert.Equal(t, []string{"test-server__review"}, prompts)
+	assert.Equal(t, []string{status.URI}, resources)
+	assert.NotContains(t, resources, secret.URI)
 	_, ok = service.GetToolInstance("test-server__echo")
 	assert.True(t, ok)
+	_, ok = service.GetToolInstance("test-server__delete")
+	assert.False(t, ok)
+
+	// resuming an enabled server changes nothing
+	resumedTools, resumedPrompts, err := service.EnableMcpServer("test-server")
+	require.NoError(t, err)
+	assert.Empty(t, resumedTools)
+	assert.Empty(t, resumedPrompts)
 }
 
 func TestDeregisterMcpServer_RemovesEntitiesOAuthStateAndSession(t *testing.T) {

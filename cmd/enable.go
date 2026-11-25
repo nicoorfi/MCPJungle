@@ -61,9 +61,10 @@ var enablePromptsCmd = &cobra.Command{
 var enableServerCmd = &cobra.Command{
 	Use:   "server [name]",
 	Args:  cobra.ExactArgs(1),
-	Short: "Enable all tools and prompts from a MCP server globally",
-	Long: "Specify the name of a MCP server to enable all its tools and prompts in the mcp proxy.\n" +
-		"If a server is enabled, all its tools and prompts can be viewed and used by mcp clients.",
+	Short: "Resume a paused MCP server globally",
+	Long: "Specify the name of a MCP server to resume it in the mcp proxy.\n" +
+		"Its tools, prompts and resources that are enabled on their own become available to mcp clients again.\n" +
+		"Items you disabled individually stay disabled. Use 'enable tool [server]' to enable all its tools.",
 	RunE: runEnableServer,
 }
 
@@ -135,7 +136,7 @@ func runEnableServer(cmd *cobra.Command, args []string) error {
 
 	if len(resp.ToolsAffected) > 0 {
 		cmd.Println()
-		cmd.Println("Following MCP tools have been enabled:")
+		cmd.Println("Following MCP tools are available to mcp clients again:")
 		for _, tool := range resp.ToolsAffected {
 			cmd.Printf("    - %s\n", tool)
 		}
@@ -143,7 +144,7 @@ func runEnableServer(cmd *cobra.Command, args []string) error {
 
 	if len(resp.PromptsAffected) > 0 {
 		cmd.Println()
-		cmd.Println("Following MCP prompts have been enabled:")
+		cmd.Println("Following MCP prompts are available to mcp clients again:")
 		for _, prompt := range resp.PromptsAffected {
 			cmd.Printf("    - %s\n", prompt)
 		}

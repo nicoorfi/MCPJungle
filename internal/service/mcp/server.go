@@ -7,6 +7,7 @@ import (
 	"log"
 
 	mcpgotransport "github.com/mark3labs/mcp-go/client/transport"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/pkg/apierrors"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
@@ -196,78 +197,98 @@ func (m *MCPService) GetMcpServer(name string) (*model.McpServer, error) {
 	return &serverModel, nil
 }
 
-// EnableMcpServer enables all tools, prompts and resources registered by the given MCP server.
-// It returns the names of the enabled tools and prompts.
-// If even a single tool, prompt or resource fails to enable, the operation fails.
+// EnableMcpServer resumes a paused MCP server.
+// It writes only the server row, then publishes the server's tools, prompts and resources
+// that are enabled on their own. Items disabled on their own stay disabled.
+// It returns the names of the tools and prompts it published.
 func (m *MCPService) EnableMcpServer(name string) ([]string, []string, error) {
-	if err := validateServerName(name); err != nil {
-		return nil, nil, err
-	}
-	if err := m.setMcpServerEnabled(name, true); err != nil {
-		return nil, nil, fmt.Errorf("failed to mark server %s enabled: %w", name, err)
-	}
-	toolsEnabled, err := m.EnableTools(name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to enable tools for server %s: %w", name, err)
-	}
-	promptsEnabled, err := m.EnablePrompts(name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to enable prompts for server %s: %w", name, err)
-	}
-	if _, err := m.EnableResources(name); err != nil {
-		return nil, nil, fmt.Errorf("failed to enable resources for server %s: %w", name, err)
-	}
-	return toolsEnabled, promptsEnabled, nil
+	return m.setMcpServerEnabled(name, true)
 }
 
-// DisableMcpServer disables all tools, prompts and resources registered by the given MCP server.
-// It returns the names of the disabled tools and prompts.
-// If even a single tool, prompt or resource fails to disable, the operation fails.
+// DisableMcpServer pauses an MCP server.
+// It writes only the server row, then unpublishes all the server's tools, prompts and resources.
+// Each item keeps its own enabled flag, so resuming the server restores the same selection.
+// It returns the names of the tools and prompts it unpublished.
 func (m *MCPService) DisableMcpServer(name string) ([]string, []string, error) {
-	if err := validateServerName(name); err != nil {
-		return nil, nil, err
-	}
-	if err := m.setMcpServerEnabled(name, false); err != nil {
-		return nil, nil, fmt.Errorf("failed to mark server %s disabled: %w", name, err)
-	}
-	toolsDisabled, err := m.DisableTools(name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to disable tools for server %s: %w", name, err)
-	}
-	promptsDisabled, err := m.DisablePrompts(name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to disable prompts for server %s: %w", name, err)
-	}
-	if _, err := m.DisableResources(name); err != nil {
-		return nil, nil, fmt.Errorf("failed to disable resources for server %s: %w", name, err)
-	}
-	return toolsDisabled, promptsDisabled, nil
+	return m.setMcpServerEnabled(name, false)
 }
 
 // SetDashboardServerEnabled reuses the standard server enable/disable flow so dashboard
-// toggles stay consistent with CLI semantics and cascade to the server's tools, prompts,
-// and resources.
+// toggles stay consistent with CLI semantics.
 func (m *MCPService) SetDashboardServerEnabled(name string, enabled bool) error {
-	if enabled {
-		_, _, err := m.EnableMcpServer(name)
-		return err
-	}
-	_, _, err := m.DisableMcpServer(name)
+	_, _, err := m.setMcpServerEnabled(name, enabled)
 	return err
 }
 
-// setMcpServerEnabled is a helper that updates the enabled status of the MCP server in the DB.
-func (m *MCPService) setMcpServerEnabled(name string, enabled bool) error {
-	server, err := m.GetMcpServer(name)
+// setMcpServerEnabled pauses or resumes a server and returns the tools and prompts whose publication changed.
+func (m *MCPService) setMcpServerEnabled(name string, enabled bool) ([]string, []string, error) {
+	if err := validateServerName(name); err != nil {
+		return nil, nil, err
+	}
+	s, err := m.GetMcpServer(name)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	if server.Enabled == enabled {
-		return nil
+	if s.Enabled == enabled {
+		return nil, nil, nil
 	}
-	server.Enabled = enabled
-	if err := m.db.Save(server).Error; err != nil {
-		return fmt.Errorf("failed to set server %s enabled=%t: %w", name, enabled, err)
+	s.Enabled = enabled
+	if err := m.db.Save(s).Error; err != nil {
+		return nil, nil, fmt.Errorf("failed to set server %s enabled=%t: %w", name, enabled, err)
 	}
-	return nil
+	return m.syncServerPublication(s)
+}
+
+// syncServerPublication makes the gateway proxy, the tool groups and the tool instance tracker
+// show exactly the server's items that pass this rule:
+//
+//	published(item) = server.Enabled && item.Enabled
+//
+// It reads item rows and never writes them. Pause, resume and startup all go through it.
+// An item disabled on its own is never published, so only enabled items need syncing.
+// It returns the canonical names of the tools and prompts it synced.
+func (m *MCPService) syncServerPublication(s *model.McpServer) ([]string, []string, error) {
+	var tools []model.Tool
+	if err := m.db.Where("server_id = ? AND enabled = ?", s.ID, true).Find(&tools).Error; err != nil {
+		return nil, nil, fmt.Errorf("failed to get tools for server %s: %w", s.Name, err)
+	}
+	toolNames := make([]string, len(tools))
+	for i := range tools {
+		if err := m.setToolPublished(s, &tools[i], s.Enabled); err != nil {
+			return nil, nil, err
+		}
+		toolNames[i] = mergeServerToolNames(s.Name, tools[i].Name)
+	}
+
+	var prompts []model.Prompt
+	if err := m.db.Where("server_id = ? AND enabled = ?", s.ID, true).Find(&prompts).Error; err != nil {
+		return nil, nil, fmt.Errorf("failed to get prompts for server %s: %w", s.Name, err)
+	}
+	promptNames := make([]string, len(prompts))
+	for i := range prompts {
+		if err := m.setPromptPublished(s, &prompts[i], s.Enabled); err != nil {
+			return nil, nil, err
+		}
+		promptNames[i] = mergeServerPromptNames(s.Name, prompts[i].Name)
+	}
+
+	var resources []model.Resource
+	if err := m.db.Where("server_id = ? AND enabled = ?", s.ID, true).Find(&resources).Error; err != nil {
+		return nil, nil, fmt.Errorf("failed to get resources for server %s: %w", s.Name, err)
+	}
+	for i := range resources {
+		if err := m.setResourcePublished(s, &resources[i], s.Enabled); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return toolNames, promptNames, nil
+}
+
+// proxyFor returns the gateway proxy that serves the server's transport.
+func (m *MCPService) proxyFor(s *model.McpServer) *server.MCPServer {
+	if s.Transport == types.TransportSSE {
+		return m.sseMcpProxyServer
+	}
+	return m.mcpProxyServer
 }

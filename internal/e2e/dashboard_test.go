@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
@@ -161,13 +162,30 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 	firstPrompt := promptsPayload["prompts"].([]any)[0].(map[string]any)
 	require.Equal(t, true, firstPrompt["enabled"])
 
+	groupResp := env.do(t, http.MethodPost, "/api/v0/tool-groups", map[string]any{
+		"name":             "dashgroup",
+		"included_servers": []string{"dashsrv"},
+	}, "")
+	defer drain(groupResp)
+	require.Equal(t, http.StatusCreated, groupResp.StatusCode)
+
 	proxyClient := newMCPProxyClient(t, env, "")
+	groupClient := newGroupMCPClient(t, env, "dashgroup", "")
+	listToolNames := func(c *client.Client) []string {
+		t.Helper()
+		res, err := c.ListTools(context.Background(), mcp.ListToolsRequest{})
+		require.NoError(t, err)
+		return toolResultNames(res.Tools)
+	}
 	toolsBefore, err := proxyClient.ListTools(context.Background(), mcp.ListToolsRequest{})
 	require.NoError(t, err)
 	require.Contains(t, toolResultNames(toolsBefore.Tools), "dashsrv__echo")
+	toolCount := len(toolsBefore.Tools)
+	require.Len(t, listToolNames(groupClient), toolCount)
 	promptsBefore, err := proxyClient.ListPrompts(context.Background(), mcp.ListPromptsRequest{})
 	require.NoError(t, err)
 	require.Contains(t, promptResultNames(promptsBefore.Prompts), "dashsrv__simple-prompt")
+	promptCount := len(promptsBefore.Prompts)
 
 	disableToolResp := env.do(t, http.MethodPatch, "/api/dashboard/tools/dashsrv__echo/enabled", map[string]any{
 		"enabled": false,
@@ -229,10 +247,19 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 
 	toolsAfterServerDisable, err := proxyClient.ListTools(context.Background(), mcp.ListToolsRequest{})
 	require.NoError(t, err)
-	require.NotContains(t, toolResultNames(toolsAfterServerDisable.Tools), "dashsrv__get-sum")
+	require.Empty(t, toolsAfterServerDisable.Tools)
+	require.Empty(t, listToolNames(groupClient))
 	promptsAfterServerDisable, err := proxyClient.ListPrompts(context.Background(), mcp.ListPromptsRequest{})
 	require.NoError(t, err)
-	require.NotContains(t, promptResultNames(promptsAfterServerDisable.Prompts), "dashsrv__simple-prompt")
+	require.Empty(t, promptsAfterServerDisable.Prompts)
+
+	invokePausedResp := env.do(t, http.MethodPost, "/api/v0/tools/invoke", map[string]any{
+		"name": "dashsrv__get-sum",
+		"a":    1,
+		"b":    2,
+	}, "")
+	defer drain(invokePausedResp)
+	require.Equal(t, http.StatusBadRequest, invokePausedResp.StatusCode)
 
 	overviewResp := env.do(t, http.MethodGet, "/api/dashboard/overview", nil, "")
 	defer drain(overviewResp)
@@ -249,6 +276,30 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 	defer drain(enableServerResp)
 	require.Equal(t, http.StatusOK, enableServerResp.StatusCode)
 
+	// resuming the server restores the item choices made before the pause
+	toolsAfterResume := listToolNames(proxyClient)
+	require.Len(t, toolsAfterResume, toolCount-1)
+	require.NotContains(t, toolsAfterResume, "dashsrv__echo")
+	groupToolsAfterResume := listToolNames(groupClient)
+	require.Len(t, groupToolsAfterResume, toolCount-1)
+	require.NotContains(t, groupToolsAfterResume, "dashsrv__echo")
+	promptsAfterResume, err := proxyClient.ListPrompts(context.Background(), mcp.ListPromptsRequest{})
+	require.NoError(t, err)
+	require.Len(t, promptsAfterResume.Prompts, promptCount-1)
+	require.NotContains(t, promptResultNames(promptsAfterResume.Prompts), "dashsrv__simple-prompt")
+
+	toolsAfterResumeResp := env.do(t, http.MethodGet, "/api/dashboard/tools", nil, "")
+	defer drain(toolsAfterResumeResp)
+	require.Equal(t, http.StatusOK, toolsAfterResumeResp.StatusCode)
+	var toolsAfterResumePayload map[string]any
+	decodeJSON(t, toolsAfterResumeResp, &toolsAfterResumePayload)
+	for _, item := range toolsAfterResumePayload["tools"].([]any) {
+		tool := item.(map[string]any)
+		if tool["canonical_name"] == "dashsrv__echo" {
+			require.Equal(t, false, tool["enabled"])
+		}
+	}
+
 	enableToolResp := env.do(t, http.MethodPatch, "/api/dashboard/tools/dashsrv__echo/enabled", map[string]any{
 		"enabled": true,
 	}, "")
@@ -264,6 +315,7 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 	toolsAfterEnable, err := proxyClient.ListTools(context.Background(), mcp.ListToolsRequest{})
 	require.NoError(t, err)
 	require.Contains(t, toolResultNames(toolsAfterEnable.Tools), "dashsrv__echo")
+	require.Contains(t, listToolNames(groupClient), "dashsrv__echo")
 	promptsAfterEnable, err := proxyClient.ListPrompts(context.Background(), mcp.ListPromptsRequest{})
 	require.NoError(t, err)
 	require.Contains(t, promptResultNames(promptsAfterEnable.Prompts), "dashsrv__simple-prompt")

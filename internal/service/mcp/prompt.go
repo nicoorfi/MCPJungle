@@ -193,35 +193,16 @@ func (m *MCPService) setPromptsEnabled(entity string, enabled bool) ([]string, e
 		if err := m.db.Save(&prompt).Error; err != nil {
 			return nil, fmt.Errorf("failed to set prompt %s enabled=%t: %w", entity, enabled, err)
 		}
-
-		if enabled {
-			// if the prompt was enabled, add it back to the MCP proxy server
-			mcpPrompt, err := convertPromptModelToMcpObject(&prompt)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert prompt model to MCP object for prompt %s: %w", prompt.Name, err)
-			}
-			// set the prompt name to its canonical form in the proxy
-			mcpPrompt.Name = entity
-
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.AddPrompt(mcpPrompt, m.mcpProxyPromptHandler)
-			} else {
-				m.mcpProxyServer.AddPrompt(mcpPrompt, m.mcpProxyPromptHandler)
-			}
-		} else {
-			// if the prompt was disabled, remove it from the MCP proxy server
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.DeletePrompts(entity)
-			} else {
-				m.mcpProxyServer.DeletePrompts(entity)
-			}
+		if err := m.setPromptPublished(s, &prompt, s.Enabled && enabled); err != nil {
+			return nil, err
 		}
 
 		return []string{entity}, nil
 	}
 
 	// splitting was unsuccessful, so the entity is a server name
-	// all prompts of this server need to be enabled/disabled
+	// all prompts of this server need to be enabled/disabled.
+	// The rows change even while the server is paused; they are published only when it is enabled.
 	s, err := m.GetMcpServer(entity)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MCP server %s: %w", serverName, err)
@@ -241,30 +222,10 @@ func (m *MCPService) setPromptsEnabled(entity string, enabled bool) ([]string, e
 		if err := m.db.Save(&prompts[i]).Error; err != nil {
 			return nil, fmt.Errorf("failed to set prompt %s enabled=%t: %w", prompts[i].Name, enabled, err)
 		}
-		canonicalPromptName := mergeServerPromptNames(s.Name, prompts[i].Name)
-
-		if enabled {
-			mcpPrompt, err := convertPromptModelToMcpObject(&prompts[i])
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert prompt model to MCP object for prompt %s: %w", prompts[i].Name, err)
-			}
-			// set the prompt name to its canonical form in the proxy
-			mcpPrompt.Name = canonicalPromptName
-
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.AddPrompt(mcpPrompt, m.mcpProxyPromptHandler)
-			} else {
-				m.mcpProxyServer.AddPrompt(mcpPrompt, m.mcpProxyPromptHandler)
-			}
-		} else {
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.DeletePrompts(canonicalPromptName)
-			} else {
-				m.mcpProxyServer.DeletePrompts(canonicalPromptName)
-			}
+		if err := m.setPromptPublished(s, &prompts[i], s.Enabled && enabled); err != nil {
+			return nil, err
 		}
-
-		changedPromptNames = append(changedPromptNames, canonicalPromptName)
+		changedPromptNames = append(changedPromptNames, mergeServerPromptNames(s.Name, prompts[i].Name))
 	}
 
 	return changedPromptNames, nil
@@ -296,14 +257,8 @@ func (m *MCPService) registerServerPrompts(ctx context.Context, s *model.McpServ
 			log.Printf("[ERROR] failed to register prompt %s in DB: %v", canonicalPromptName, err)
 		} else {
 			// Set prompt name to include the server name prefix to make it recognizable by MCPJungle
-			// then add the prompt to the MCP proxy server
 			prompt.Name = canonicalPromptName
-
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.AddPrompt(prompt, m.mcpProxyPromptHandler)
-			} else {
-				m.mcpProxyServer.AddPrompt(prompt, m.mcpProxyPromptHandler)
-			}
+			m.proxyFor(s).AddPrompt(prompt, m.mcpProxyPromptHandler)
 		}
 	}
 	return nil
@@ -324,17 +279,28 @@ func (m *MCPService) deregisterServerPrompts(s *model.McpServer) error {
 		return fmt.Errorf("failed to delete prompts for server %s: %w", s.Name, result.Error)
 	}
 
-	// delete prompts from MCP proxy server
 	promptNames := make([]string, len(prompts))
 	for i, prompt := range prompts {
 		promptNames[i] = prompt.Name
 	}
+	m.proxyFor(s).DeletePrompts(promptNames...)
 
-	if s.Transport == types.TransportSSE {
-		m.sseMcpProxyServer.DeletePrompts(promptNames...)
-	} else {
-		m.mcpProxyServer.DeletePrompts(promptNames...)
+	return nil
+}
+
+// setPromptPublished publishes or unpublishes one prompt row of the server on the gateway proxy.
+// Callers pass published = server.Enabled && prompt.Enabled.
+func (m *MCPService) setPromptPublished(s *model.McpServer, p *model.Prompt, published bool) error {
+	name := mergeServerPromptNames(s.Name, p.Name)
+	if !published {
+		m.proxyFor(s).DeletePrompts(name)
+		return nil
 	}
-
+	prompt, err := convertPromptModelToMcpObject(p)
+	if err != nil {
+		return fmt.Errorf("failed to convert prompt model to MCP object for prompt %s: %w", name, err)
+	}
+	prompt.Name = name
+	m.proxyFor(s).AddPrompt(prompt, m.mcpProxyPromptHandler)
 	return nil
 }

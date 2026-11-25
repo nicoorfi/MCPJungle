@@ -9,7 +9,6 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
 	"github.com/mcpjungle/mcpjungle/pkg/apierrors"
-	"github.com/mcpjungle/mcpjungle/pkg/types"
 )
 
 func authorizeProxyServerAccess(ctx context.Context, serverName string) error {
@@ -173,120 +172,17 @@ func (m *MCPService) mcpProxyPromptHandler(ctx context.Context, request mcp.GetP
 	return res, err
 }
 
-// initMCPProxyServer initializes the MCP proxy server.
-// It loads all the registered MCP tools, prompts and resources from the database into the proxy server.
+// initMCPProxyServer publishes the items of every registered server at startup.
+// Items of a paused server stay unpublished.
 func (m *MCPService) initMCPProxyServer() error {
-	mcpServerModelsCache := make(map[string]*model.McpServer)
-	// Load Tools
-	tools, err := m.ListTools()
+	servers, err := m.ListMcpServers()
 	if err != nil {
-		return fmt.Errorf("failed to list tools from DB: %w", err)
+		return fmt.Errorf("failed to list MCP servers from DB: %w", err)
 	}
-
-	for _, tm := range tools {
-		if !tm.Enabled {
-			// do not add disabled tools to the proxy
-			continue
-		}
-
-		// Add tool to the MCP proxy server
-		tool, err := convertToolModelToMcpObject(&tm)
-		if err != nil {
-			return fmt.Errorf("failed to convert tool model to MCP object for tool %s: %w", tm.Name, err)
-		}
-
-		// get the tool's MCP server so we can determine the transport type
-		// use a cache to avoid querying the DB multiple times for the same server
-		// since multiple tools can belong to the same server
-		var server *model.McpServer
-		serverName, _, _ := splitServerToolName(tool.Name)
-
-		server, exists := mcpServerModelsCache[serverName]
-		if !exists {
-			server, err = m.GetMcpServer(serverName)
-			if err != nil {
-				return fmt.Errorf(
-					"init mcp proxy server: failed to get MCP server %s for tool %s from DB: %w", serverName, tool.Name, err,
-				)
-			}
-			// store the server model in cache so we don't have to query the DB again for the same server
-			mcpServerModelsCache[serverName] = server
-		}
-
-		if server.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
-		} else {
-			m.mcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
-		}
-
-		m.addToolInstance(tool)
-	}
-
-	// Load prompts
-	prompts, err := m.ListPrompts()
-	if err != nil {
-		return fmt.Errorf("failed to list prompts from DB: %w", err)
-	}
-
-	for _, pm := range prompts {
-		if !pm.Enabled {
-			// do not add disabled prompts to the proxy
-			continue
-		}
-
-		// Add prompt to the MCP proxy server
-		prompt, err := convertPromptModelToMcpObject(&pm)
-		if err != nil {
-			return fmt.Errorf("failed to convert prompt model to MCP object for prompt %s: %w", pm.Name, err)
-		}
-
-		// get the prompt's MCP server from cache so we can determine the transport type
-		var server *model.McpServer
-		serverName, _, _ := splitServerPromptName(prompt.Name)
-
-		server, exists := mcpServerModelsCache[serverName]
-		if !exists {
-			server, err = m.GetMcpServer(serverName)
-			if err != nil {
-				return fmt.Errorf(
-					"init mcp proxy server: failed to get MCP server %s for tool %s from DB: %w", serverName, prompt.Name, err,
-				)
-			}
-			mcpServerModelsCache[serverName] = server
-		}
-
-		if server.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.AddPrompt(prompt, m.mcpProxyPromptHandler)
-		} else {
-			m.mcpProxyServer.AddPrompt(prompt, m.mcpProxyPromptHandler)
+	for i := range servers {
+		if _, _, err := m.syncServerPublication(&servers[i]); err != nil {
+			return fmt.Errorf("init mcp proxy server: %w", err)
 		}
 	}
-
-	// Load resources
-	resources, err := m.ListResources()
-	if err != nil {
-		return fmt.Errorf("failed to list resources from DB: %w", err)
-	}
-
-	for _, rm := range resources {
-		if !rm.Enabled {
-			continue
-		}
-
-		// no need to use mcp servers model cache because resources come pre-loaded with server, ie, rm.Server
-
-		resource, err := convertResourceModelToMcpObject(&rm)
-		if err != nil {
-			return fmt.Errorf("failed to convert resource model to MCP object for resource %s: %w", rm.URI, err)
-		}
-		resource.Name = rm.Name
-
-		if rm.Server.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.AddResource(resource, m.mcpProxyResourceHandler)
-		} else {
-			m.mcpProxyServer.AddResource(resource, m.mcpProxyResourceHandler)
-		}
-	}
-
 	return nil
 }

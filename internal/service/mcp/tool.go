@@ -233,45 +233,16 @@ func (m *MCPService) setToolsEnabled(entity string, enabled bool) ([]string, err
 		if err := m.db.Save(&tool).Error; err != nil {
 			return nil, fmt.Errorf("failed to set tool %s enabled=%t: %w", entity, enabled, err)
 		}
-
-		if enabled {
-			// if the tool was enabled, add it back to the appropriate MCP proxy server
-			mcpTool, err := convertToolModelToMcpObject(&tool)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert tool model to MCP object for tool %s: %w", tool.Name, err)
-			}
-			// set the tool name to its canonical form in the proxy
-			mcpTool.Name = entity
-
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.AddTool(mcpTool, m.MCPProxyToolCallHandler)
-			} else {
-				m.mcpProxyServer.AddTool(mcpTool, m.MCPProxyToolCallHandler)
-			}
-
-			// also add the tool to the in-memory tool instance tracker
-			m.addToolInstance(mcpTool)
-			// notify any registered callbacks about the tool addition (re-enabling)
-			m.notifyToolAddition(mcpTool.Name)
-		} else {
-			// if the tool was disabled, remove it from the appropriate MCP proxy server
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.DeleteTools(entity)
-			} else {
-				m.mcpProxyServer.DeleteTools(entity)
-			}
-
-			// also remove the tool from the in-memory tool instance tracker
-			m.deleteToolInstances(entity)
-			// notify any registered callbacks about the tool deletion
-			m.notifyToolDeletion(entity)
+		if err := m.setToolPublished(s, &tool, s.Enabled && enabled); err != nil {
+			return nil, err
 		}
 
 		return []string{entity}, nil
 	}
 
 	// splitting was unsuccessful, so the entity is a server name
-	// all tools of this server need to be enabled/disabled
+	// all tools of this server need to be enabled/disabled.
+	// The rows change even while the server is paused; they are published only when it is enabled.
 	s, err := m.GetMcpServer(entity)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MCP server %s: %w", serverName, err)
@@ -291,36 +262,10 @@ func (m *MCPService) setToolsEnabled(entity string, enabled bool) ([]string, err
 		if err := m.db.Save(&tools[i]).Error; err != nil {
 			return nil, fmt.Errorf("failed to set tool %s enabled=%t: %w", tools[i].Name, enabled, err)
 		}
-		canonicalToolName := mergeServerToolNames(s.Name, tools[i].Name)
-
-		if enabled {
-			mcpTool, err := convertToolModelToMcpObject(&tools[i])
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert tool model to MCP object for tool %s: %w", tools[i].Name, err)
-			}
-			// set the tool name to its canonical form in the proxy
-			mcpTool.Name = canonicalToolName
-
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.AddTool(mcpTool, m.MCPProxyToolCallHandler)
-			} else {
-				m.mcpProxyServer.AddTool(mcpTool, m.MCPProxyToolCallHandler)
-			}
-
-			m.addToolInstance(mcpTool)
-			m.notifyToolAddition(mcpTool.Name)
-		} else {
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.DeleteTools(canonicalToolName)
-			} else {
-				m.mcpProxyServer.DeleteTools(canonicalToolName)
-			}
-
-			m.deleteToolInstances(canonicalToolName)
-			m.notifyToolDeletion(canonicalToolName)
+		if err := m.setToolPublished(s, &tools[i], s.Enabled && enabled); err != nil {
+			return nil, err
 		}
-
-		changedToolNames = append(changedToolNames, canonicalToolName)
+		changedToolNames = append(changedToolNames, mergeServerToolNames(s.Name, tools[i].Name))
 	}
 
 	return changedToolNames, nil
@@ -358,19 +303,8 @@ func (m *MCPService) registerServerTools(ctx context.Context, s *model.McpServer
 		}
 
 		// Set tool name to include the server name prefix to make it recognizable by MCPJungle
-		// then add the tool to the appropriate MCP proxy server
 		tool.Name = canonicalToolName
-
-		if s.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
-		} else {
-			m.mcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
-		}
-
-		// also add the tool to the in-memory tool instance tracker
-		m.addToolInstance(tool)
-		// notify any registered callbacks about the tool addition
-		m.notifyToolAddition(tool.Name)
+		m.publishTool(s, tool)
 	}
 	return nil
 }
@@ -390,25 +324,44 @@ func (m *MCPService) deregisterServerTools(s *model.McpServer) error {
 		return fmt.Errorf("failed to delete tools for server %s: %w", s.Name, result.Error)
 	}
 
-	// delete tools from MCP proxy server
 	toolNames := make([]string, len(tools))
 	for i, tool := range tools {
 		toolNames[i] = tool.Name
 	}
-
-	if s.Transport == types.TransportSSE {
-		m.sseMcpProxyServer.DeleteTools(toolNames...)
-	} else {
-		m.mcpProxyServer.DeleteTools(toolNames...)
-	}
-
-	// delete tools from Tool instance tracker
-	m.deleteToolInstances(toolNames...)
-
-	// notify any registered callbacks about the tool deletion
-	m.notifyToolDeletion(toolNames...)
+	m.unpublishTools(s, toolNames...)
 
 	return nil
+}
+
+// setToolPublished publishes or unpublishes one tool row of the server.
+// Callers pass published = server.Enabled && tool.Enabled.
+func (m *MCPService) setToolPublished(s *model.McpServer, t *model.Tool, published bool) error {
+	name := mergeServerToolNames(s.Name, t.Name)
+	if !published {
+		m.unpublishTools(s, name)
+		return nil
+	}
+	tool, err := convertToolModelToMcpObject(t)
+	if err != nil {
+		return fmt.Errorf("failed to convert tool model to MCP object for tool %s: %w", name, err)
+	}
+	tool.Name = name
+	m.publishTool(s, tool)
+	return nil
+}
+
+// publishTool exposes a tool, named canonically, on the gateway proxy and in every tool group that includes it.
+func (m *MCPService) publishTool(s *model.McpServer, tool mcp.Tool) {
+	m.proxyFor(s).AddTool(tool, m.MCPProxyToolCallHandler)
+	m.addToolInstance(tool)
+	m.notifyToolAddition(tool.Name)
+}
+
+// unpublishTools removes tools, named canonically, from the gateway proxy and from every tool group.
+func (m *MCPService) unpublishTools(s *model.McpServer, names ...string) {
+	m.proxyFor(s).DeleteTools(names...)
+	m.deleteToolInstances(names...)
+	m.notifyToolDeletion(names...)
 }
 
 // addToolInstance adds a tool instance to the in-memory tool instance tracker.

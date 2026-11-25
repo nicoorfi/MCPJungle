@@ -632,10 +632,10 @@ mcpjungle enable tool context7__get-library-docs
 # disable all tools in context7
 mcpjungle disable tool context7
 
-# disable the whole `context7` MCP server (disables all tools & prompts)
+# pause the whole `context7` MCP server (hides all its tools & prompts, keeps each one's own enabled state)
 mcpjungle disable server context7
 
-# re-enable `context7`
+# resume `context7` (individually disabled tools stay disabled)
 mcpjungle enable server context7
 
 # disable a prompt

@@ -120,7 +120,7 @@ mcpjungle enable tool context7
 
 ### Disable or re-enable an entire server
 
-Disabling a server disables all of its tools, prompts and resources in one step:
+Disabling a server pauses it: none of its tools, prompts or resources are listed or callable. Each item keeps its own enabled state, so enabling the server again restores the same selection. Tools you disabled individually stay disabled.
 
 ```bash
 mcpjungle disable server context7

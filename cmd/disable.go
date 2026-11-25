@@ -61,9 +61,10 @@ var disablePromptsCmd = &cobra.Command{
 var disableServerCmd = &cobra.Command{
 	Use:   "server [name]",
 	Args:  cobra.ExactArgs(1),
-	Short: "Disable all tools and prompts from a MCP server globally",
-	Long: "Specify the name of a MCP server to disable all its tools and prompts in the mcp proxy.\n" +
-		"If a server is disabled, its tools and prompts CANNOT be viewed or used by mcp clients.",
+	Short: "Pause a MCP server globally",
+	Long: "Specify the name of a MCP server to pause it in the mcp proxy.\n" +
+		"While a server is paused, its tools, prompts and resources CANNOT be viewed or used by mcp clients.\n" +
+		"Each tool, prompt and resource keeps its own enabled state, so 'enable server' restores the same selection.",
 	RunE: runDisableServer,
 }
 
@@ -137,7 +138,7 @@ func runDisableServer(cmd *cobra.Command, args []string) error {
 
 	if len(resp.ToolsAffected) > 0 {
 		cmd.Println()
-		cmd.Println("Following MCP tools have been disabled:")
+		cmd.Println("Following MCP tools are no longer available to mcp clients:")
 		for _, tool := range resp.ToolsAffected {
 			cmd.Printf("    - %s\n", tool)
 		}
@@ -145,7 +146,7 @@ func runDisableServer(cmd *cobra.Command, args []string) error {
 
 	if len(resp.PromptsAffected) > 0 {
 		cmd.Println()
-		cmd.Println("Following MCP prompts have been disabled:")
+		cmd.Println("Following MCP prompts are no longer available to mcp clients:")
 		for _, prompt := range resp.PromptsAffected {
 			cmd.Printf("    - %s\n", prompt)
 		}

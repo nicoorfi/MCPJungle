@@ -3,12 +3,14 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"syscall"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mcpjungle/mcpjungle/internal/model"
+	"github.com/mcpjungle/mcpjungle/pkg/apierrors"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
 )
 
@@ -66,7 +68,11 @@ func (sr *sessionResult) invalidateOnError(err error) {
 // getSession returns a session for the given MCP server.
 // For stateful servers, it returns a persistent session from the SessionManager.
 // For stateless servers, it creates a new session that should be closed after use.
+// It refuses a paused server, so no call path (HTTP API or MCP proxy) reaches its upstream.
 func (m *MCPService) getSession(ctx context.Context, server *model.McpServer) (*sessionResult, error) {
+	if !server.Enabled {
+		return nil, fmt.Errorf("MCP server %s is disabled: %w", server.Name, apierrors.ErrInvalidInput)
+	}
 	if server.SessionMode == types.SessionModeStateful {
 		// Use the session manager for stateful sessions
 		mcpClient, err := m.sessionManager.GetOrCreateSession(ctx, server)

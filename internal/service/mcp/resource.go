@@ -233,29 +233,15 @@ func (m *MCPService) setResourcesEnabled(entity string, enabled bool) ([]string,
 		return nil, fmt.Errorf("failed to set resource %s enabled=%t: %w", resource.URI, enabled, err)
 	}
 
-	if enabled {
-		mcpResource, err := convertResourceModelToMcpObject(&resource)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert resource model to MCP object for resource %s: %w", resource.URI, err)
-		}
-		mcpResource.Name = mergeServerResourceNames(resource.Server.Name, mcpResource.Name)
-
-		if resource.Server.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.AddResource(mcpResource, m.mcpProxyResourceHandler)
-		} else {
-			m.mcpProxyServer.AddResource(mcpResource, m.mcpProxyResourceHandler)
-		}
-	} else {
-		if resource.Server.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.DeleteResources(resource.URI)
-		} else {
-			m.mcpProxyServer.DeleteResources(resource.URI)
-		}
+	if err := m.setResourcePublished(&resource.Server, &resource, resource.Server.Enabled && enabled); err != nil {
+		return nil, err
 	}
 
 	return []string{resource.URI}, nil
 }
 
+// setServerResourcesEnabled writes the enabled flag of all the server's resources.
+// The rows change even while the server is paused; they are published only when it is enabled.
 func (m *MCPService) setServerResourcesEnabled(s *model.McpServer, enabled bool) ([]string, error) {
 	var resources []model.Resource
 	if err := m.db.Where("server_id = ?", s.ID).Find(&resources).Error; err != nil {
@@ -271,27 +257,9 @@ func (m *MCPService) setServerResourcesEnabled(s *model.McpServer, enabled bool)
 		if err := m.db.Save(&resources[i]).Error; err != nil {
 			return nil, fmt.Errorf("failed to set resource %s enabled=%t: %w", resources[i].URI, enabled, err)
 		}
-
-		if enabled {
-			mcpResource, err := convertResourceModelToMcpObject(&resources[i])
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert resource model to MCP object for resource %s: %w", resources[i].URI, err)
-			}
-			mcpResource.Name = mergeServerResourceNames(s.Name, mcpResource.Name)
-
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.AddResource(mcpResource, m.mcpProxyResourceHandler)
-			} else {
-				m.mcpProxyServer.AddResource(mcpResource, m.mcpProxyResourceHandler)
-			}
-		} else {
-			if s.Transport == types.TransportSSE {
-				m.sseMcpProxyServer.DeleteResources(resources[i].URI)
-			} else {
-				m.mcpProxyServer.DeleteResources(resources[i].URI)
-			}
+		if err := m.setResourcePublished(s, &resources[i], s.Enabled && enabled); err != nil {
+			return nil, err
 		}
-
 		changedURIs = append(changedURIs, resources[i].URI)
 	}
 
@@ -328,11 +296,7 @@ func (m *MCPService) registerServerResources(ctx context.Context, s *model.McpSe
 
 		resource.URI = r.URI
 		resource.Name = canonicalResourceName
-		if s.Transport == types.TransportSSE {
-			m.sseMcpProxyServer.AddResource(resource, m.mcpProxyResourceHandler)
-		} else {
-			m.mcpProxyServer.AddResource(resource, m.mcpProxyResourceHandler)
-		}
+		m.proxyFor(s).AddResource(resource, m.mcpProxyResourceHandler)
 	}
 
 	return nil
@@ -356,11 +320,23 @@ func (m *MCPService) deregisterServerResources(s *model.McpServer) error {
 		resourceURIs[i] = resource.URI
 	}
 
-	if s.Transport == types.TransportSSE {
-		m.sseMcpProxyServer.DeleteResources(resourceURIs...)
-	} else {
-		m.mcpProxyServer.DeleteResources(resourceURIs...)
-	}
+	m.proxyFor(s).DeleteResources(resourceURIs...)
 
+	return nil
+}
+
+// setResourcePublished publishes or unpublishes one resource row of the server on the gateway proxy.
+// Callers pass published = server.Enabled && resource.Enabled.
+func (m *MCPService) setResourcePublished(s *model.McpServer, r *model.Resource, published bool) error {
+	if !published {
+		m.proxyFor(s).DeleteResources(r.URI)
+		return nil
+	}
+	resource, err := convertResourceModelToMcpObject(r)
+	if err != nil {
+		return fmt.Errorf("failed to convert resource model to MCP object for resource %s: %w", r.URI, err)
+	}
+	resource.Name = mergeServerResourceNames(s.Name, r.Name)
+	m.proxyFor(s).AddResource(resource, m.mcpProxyResourceHandler)
 	return nil
 }
