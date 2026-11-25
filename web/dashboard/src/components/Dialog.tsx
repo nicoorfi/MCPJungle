@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { errorMessage } from "@/lib/api";
 
 // A native modal <dialog>: the browser traps focus inside it and turns Escape
@@ -19,7 +19,8 @@ export function Dialog({
   const ref = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  // A layout effect, so the dialog is modal before its content's effects move focus into it.
+  useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
     if (open && !dialog.open) {

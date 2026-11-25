@@ -18,6 +18,7 @@ The Dashboard UI is served by the MCPJungle Go server at `/` in development mode
 - Hash routes: web/dashboard/src/lib/route.ts
 - Data loading: web/dashboard/src/lib/useFetch.ts
 - Tool set selection model and its test: web/dashboard/src/lib/selection.ts, selection.test.ts
+- Add-connection catalog of well-known servers, the form's draft model, and their test: web/dashboard/src/lib/catalog.ts, draft.ts, catalog.test.ts
 - Global styles and tokens: web/dashboard/src/styles.css
 
 ### Stack
@@ -425,6 +426,8 @@ The browser frontend cannot do that, so the dashboard uses the MCPJungle Go serv
 8. Backend completes the upstream OAuth session.
 9. Frontend sees completion via polling, shows what the connection offers, and refreshes dashboard data.
 
+A provider without dynamic client registration (Asana in the catalog) signs in only registered apps. The dialog then asks for that app's client ID and secret, shows the callback URL to register, and sends them as `oauth_client_id` and `oauth_client_secret`.
+
 ### Important implementation files
 
 - CLI OAuth flow reference: cmd/register.go
@@ -514,7 +517,7 @@ Useful test files include:
 
 1. Start MCPJungle in dev mode with an empty database and open `http://localhost:8080/`.
 2. Confirm the empty state shows the gateway endpoint and `Add connection`.
-3. Add a local command connection; if possible, an OAuth-required remote one.
+3. From the catalog, add Filesystem with `/tmp` and check it shows Added on the next open; add a custom local command; if possible, an OAuth-required remote one.
 4. On the connection page, switch a tool off and on, pause and resume.
 5. Create a tool set, edit it, and copy its endpoint.
 6. Reload on a deep link such as `#/sets/<name>` and use the back button.

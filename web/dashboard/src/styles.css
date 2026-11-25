@@ -390,6 +390,14 @@ main {
   background: var(--surface);
 }
 
+button.row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
 .row-text {
   display: grid;
   flex: 1;
@@ -1192,6 +1200,28 @@ input[type="radio"] {
 
 .dialog .disclosure {
   margin-top: 0;
+}
+
+/* A catalog entry at the top of its form */
+
+.entry-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.entry-head .row-text small {
+  white-space: normal;
+}
+
+.entry-head a {
+  flex: none;
+}
+
+.panel.app-setup {
+  display: grid;
+  gap: 8px;
 }
 
 /* Toast */

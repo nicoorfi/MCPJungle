@@ -98,6 +98,8 @@ export interface NewConnection {
   url?: string;
   bearer_token?: string;
   headers?: Record<string, string>;
+  oauth_client_id?: string;
+  oauth_client_secret?: string;
   command?: string;
   args?: string[];
   env?: Record<string, string>;

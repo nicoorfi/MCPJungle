@@ -1,49 +1,20 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, errorMessage } from "@/lib/api";
-import { plural } from "@/lib/format";
+import { searchCatalog, type CatalogEntry } from "@/lib/catalog";
+import { detectedProtocol, draftFrom, emptyDraft, entryInputs, suggestName, toInput, validate, type Draft, type Field } from "@/lib/draft";
+import { endpoints, plural } from "@/lib/format";
 import { href, navigate } from "@/lib/route";
-import type { Connection, NewConnection, OAuthRequired, SessionMode, Tool, Transport } from "@/lib/types";
-import { invalidate } from "@/lib/useFetch";
+import type { Connection, OAuthRequired, Tool } from "@/lib/types";
+import { invalidate, useFetch } from "@/lib/useFetch";
 import { Dialog } from "./Dialog";
-import { Choice, PairsField, RadioGroup, SecretField, TextField, type Pair } from "./fields";
-
-type Kind = "remote" | "local";
-type Protocol = "detect" | Exclude<Transport, "stdio">;
-
-interface Draft {
-  kind: Kind;
-  url: string;
-  token: string;
-  headers: Pair[];
-  protocol: Protocol;
-  command: string;
-  args: string;
-  env: Pair[];
-  name: string;
-  nameEdited: boolean;
-  description: string;
-  sessionMode: SessionMode;
-}
+import { Choice, PairsField, RadioGroup, SecretField, TextField } from "./fields";
+import { Chevron, CopyValue, Mark } from "./ui";
 
 type Step =
+  | { step: "pick" }
   | { step: "form" }
   | { step: "authorize"; name: string; auth: OAuthRequired; opened: boolean; error: string }
   | { step: "done"; name: string; connection: Connection | null; tools: Tool[] };
-
-const emptyDraft: Draft = {
-  kind: "remote",
-  url: "",
-  token: "",
-  headers: [],
-  protocol: "detect",
-  command: "",
-  args: "",
-  env: [],
-  name: "",
-  nameEdited: false,
-  description: "",
-  sessionMode: "stateless",
-};
 
 export function AddConnectionDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
@@ -55,7 +26,8 @@ export function AddConnectionDialog({ open, onClose }: { open: boolean; onClose:
 
 function AddConnection({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
-  const [step, setStep] = useState<Step>({ step: "form" });
+  const [step, setStep] = useState<Step>({ step: "pick" });
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
@@ -63,6 +35,14 @@ function AddConnection({ onClose }: { onClose: () => void }) {
 
   const problems = validate(draft);
   const problem = (field: Field) => (submitted || touched[field] ? problems[field] : undefined);
+
+  function start(next: Draft) {
+    setDraft(next);
+    setTouched({});
+    setSubmitted(false);
+    setError("");
+    setStep({ step: "form" });
+  }
 
   function update(patch: Partial<Draft>) {
     setDraft((current) => {
@@ -131,6 +111,10 @@ function AddConnection({ onClose }: { onClose: () => void }) {
       window.clearInterval(timer);
     };
   }, [polling]);
+
+  if (step.step === "pick") {
+    return <Picker onClose={onClose} onCustom={() => start(emptyDraft)} onPick={(entry) => start(draftFrom(entry))} onQuery={setQuery} query={query} />;
+  }
 
   if (step.step === "authorize") {
     return (
@@ -209,76 +193,160 @@ function AddConnection({ onClose }: { onClose: () => void }) {
   }
 
   const blur = (field: Field) => () => setTouched((current) => ({ ...current, [field]: true }));
+  const entry = draft.entry;
+  const auth = entry?.connect.kind === "remote" ? entry.connect.auth : null;
+  const inputs = entryInputs(draft);
+  // An entry focuses the first field the person still has to fill; with none left, the submit button.
+  const needsNothing = entry !== null && auth?.kind !== "token" && auth?.kind !== "oauth-app" && inputs.length === 0;
+
+  const remoteFields = (
+    <>
+      <TextField
+        autoComplete="off"
+        error={problem("url")}
+        label="URL"
+        onBlur={blur("url")}
+        onChange={(url) => update({ url })}
+        required
+        type="url"
+        value={draft.url}
+      />
+      {auth?.kind === "token" || auth?.kind === "oauth-app" ? null : (
+        <SecretField label="Bearer token" onChange={(token) => update({ token })} value={draft.token} />
+      )}
+      {detectedProtocol(draft) === "streamable_http" ? (
+        <PairsField addLabel="Add header" keyLabel="Header" label="Headers" onChange={(headers) => update({ headers })} pairs={draft.headers} />
+      ) : null}
+    </>
+  );
+
+  const localFields = (
+    <>
+      <TextField
+        autoComplete="off"
+        error={problem("command")}
+        hint="The program to start, without its arguments"
+        label="Command"
+        mono
+        onBlur={blur("command")}
+        onChange={(command) => update({ command })}
+        required
+        value={draft.command}
+      />
+      <div className="field">
+        <label htmlFor="connection-args">
+          Arguments <span className="optional">optional</span>
+        </label>
+        <p className="hint">One per line</p>
+        <textarea
+          className="mono"
+          id="connection-args"
+          onChange={(event) => update({ args: event.target.value })}
+          rows={3}
+          spellCheck={false}
+          value={draft.args}
+        />
+      </div>
+      <PairsField addLabel="Add variable" keyLabel="Variable" label="Environment" onChange={(env) => update({ env })} pairs={draft.env} />
+    </>
+  );
+
+  const connectFields = draft.kind === "remote" ? remoteFields : localFields;
 
   return (
     <form className="dialog-form" noValidate onSubmit={submit}>
-      <DialogHead onClose={onClose} title="Add a connection" />
+      <DialogHead onClose={onClose} title={entry ? `Add ${entry.name}` : "Add a connection"} />
       <div className="dialog-body stack">
-        <fieldset className="choices">
-          <legend className="visually-hidden">Kind of connection</legend>
-          <Choice checked={draft.kind === "remote"} group="connection-kind" hint="A URL that speaks MCP" label="Remote server" onSelect={() => update({ kind: "remote" })} />
-          <Choice
-            checked={draft.kind === "local"}
-            group="connection-kind"
-            hint="A program Jungle runs on this machine"
-            label="Local command"
-            onSelect={() => update({ kind: "local" })}
-          />
-        </fieldset>
-
-        {draft.kind === "remote" ? (
-          <>
-            <TextField
-              autoComplete="off"
-              error={problem("url")}
-              label="URL"
-              onBlur={blur("url")}
-              onChange={(url) => update({ url })}
-              required
-              type="url"
-              value={draft.url}
-            />
-            <SecretField label="Bearer token" onChange={(token) => update({ token })} value={draft.token} />
-            {detectedProtocol(draft) === "streamable_http" ? (
-              <PairsField
-                addLabel="Add header"
-                keyLabel="Header"
-                label="Headers"
-                onChange={(headers) => update({ headers })}
-                pairs={draft.headers}
-              />
-            ) : null}
-          </>
+        {entry ? (
+          <EntryHead entry={entry} />
         ) : (
+          <fieldset className="choices">
+            <legend className="visually-hidden">Kind of connection</legend>
+            <Choice
+              autoFocus
+              checked={draft.kind === "remote"}
+              group="connection-kind"
+              hint="A URL that speaks MCP"
+              label="Remote server"
+              onSelect={() => update({ kind: "remote" })}
+            />
+            <Choice
+              checked={draft.kind === "local"}
+              group="connection-kind"
+              hint="A program Jungle runs on this machine"
+              label="Local command"
+              onSelect={() => update({ kind: "local" })}
+            />
+          </fieldset>
+        )}
+
+        {entry ? null : connectFields}
+
+        {entry && auth?.kind === "token" ? (
+          <SecretField
+            autoFocus
+            error={problem("token")}
+            hint={
+              <a href={auth.createUrl} rel="noreferrer" target="_blank">
+                Create one in your {entry.name} settings
+              </a>
+            }
+            label={auth.label}
+            onBlur={blur("token")}
+            onChange={(token) => update({ token })}
+            required
+            value={draft.token}
+          />
+        ) : null}
+
+        {entry && auth?.kind === "oauth-app" ? (
           <>
+            <div className="panel app-setup">
+              <p className="quiet-text">
+                {entry.name} signs in only apps registered with it.{" "}
+                <a href={auth.consoleUrl} rel="noreferrer" target="_blank">
+                  Create an MCP app
+                </a>
+                , add this redirect URL to it, then paste its client ID and secret.
+              </p>
+              <CopyValue label="redirect URL" value={endpoints.oauthCallback()} />
+            </div>
             <TextField
               autoComplete="off"
-              error={problem("command")}
-              hint="The program to start, without its arguments"
-              label="Command"
+              autoFocus
+              error={problem("clientId")}
+              label="Client ID"
               mono
-              onBlur={blur("command")}
-              onChange={(command) => update({ command })}
+              onBlur={blur("clientId")}
+              onChange={(clientId) => update({ clientId })}
               required
-              value={draft.command}
+              value={draft.clientId}
             />
-            <div className="field">
-              <label htmlFor="connection-args">
-                Arguments <span className="optional">optional</span>
-              </label>
-              <p className="hint">One per line</p>
-              <textarea
-                className="mono"
-                id="connection-args"
-                onChange={(event) => update({ args: event.target.value })}
-                rows={3}
-                spellCheck={false}
-                value={draft.args}
-              />
-            </div>
-            <PairsField addLabel="Add variable" keyLabel="Variable" label="Environment" onChange={(env) => update({ env })} pairs={draft.env} />
+            <SecretField
+              error={problem("clientSecret")}
+              label="Client secret"
+              onBlur={blur("clientSecret")}
+              onChange={(clientSecret) => update({ clientSecret })}
+              required
+              value={draft.clientSecret}
+            />
           </>
-        )}
+        ) : null}
+
+        {inputs.map((input, index) => {
+          const field: Field = `input:${input.key}`;
+          const props = {
+            autoFocus: index === 0,
+            error: problem(field),
+            hint: input.hint,
+            label: input.label,
+            onBlur: blur(field),
+            onChange: (value: string) => update({ inputs: { ...draft.inputs, [input.key]: value } }),
+            required: true,
+            value: draft.inputs[input.key] ?? "",
+          };
+          return input.secret ? <SecretField key={input.key} {...props} /> : <TextField autoComplete="off" key={input.key} mono {...props} />;
+        })}
 
         <TextField
           autoComplete="off"
@@ -292,9 +360,10 @@ function AddConnection({ onClose }: { onClose: () => void }) {
         />
         <TextField label="Description" onChange={(description) => update({ description })} value={draft.description} />
 
-        <details className="disclosure">
+        <details className="disclosure" open={entry && (problem("url") || problem("command")) ? true : undefined}>
           <summary>Advanced</summary>
           <div className="stack">
+            {entry ? connectFields : null}
             {draft.kind === "remote" ? (
               <RadioGroup
                 label="Protocol"
@@ -327,10 +396,10 @@ function AddConnection({ onClose }: { onClose: () => void }) {
       </div>
       <div className="dialog-foot">
         {busy ? <p className="quiet-text foot-note">Starting it and listing its tools…</p> : null}
-        <button className="button quiet" onClick={onClose} type="button">
-          Cancel
+        <button className="button quiet" disabled={busy} onClick={() => setStep({ step: "pick" })} type="button">
+          Back
         </button>
-        <button aria-busy={busy} className="button primary" disabled={busy} type="submit">
+        <button aria-busy={busy} autoFocus={needsNothing} className="button primary" disabled={busy} type="submit">
           {busy ? "Connecting…" : "Add connection"}
         </button>
       </div>
@@ -338,102 +407,113 @@ function AddConnection({ onClose }: { onClose: () => void }) {
   );
 }
 
-type Field = "url" | "command" | "name";
+/** The first step: a well-known server, or the custom form. A server already added opens instead. */
+function Picker({
+  query,
+  onQuery,
+  onPick,
+  onCustom,
+  onClose,
+}: {
+  query: string;
+  onQuery: (query: string) => void;
+  onPick: (entry: CatalogEntry) => void;
+  onCustom: () => void;
+  onClose: () => void;
+}) {
+  const [connections] = useFetch("connections", api.connections);
+  const added = new Set(connections.status === "ready" ? connections.data.map((connection) => connection.name) : []);
+  const matches = searchCatalog(query);
+  const search = useRef<HTMLInputElement>(null);
 
-function validate(draft: Draft): Partial<Record<Field, string>> {
-  const problems: Partial<Record<Field, string>> = {};
-  if (draft.kind === "remote") {
-    if (!draft.url.trim()) problems.url = "Enter the server's URL";
-    else if (!isHttpURL(draft.url)) problems.url = "Enter a full http:// or https:// URL";
-  } else if (!draft.command.trim()) {
-    problems.command = "Enter the program to start";
+  // An effect, not autoFocus: on first open the dialog becomes modal only after React's autoFocus ran.
+  useEffect(() => search.current?.focus(), []);
+
+  function choose(entry: CatalogEntry) {
+    if (!added.has(entry.id)) return onPick(entry);
+    navigate(href.connection(entry.id));
+    onClose();
   }
-  const name = draft.name.trim();
-  if (!name) problems.name = "Name the connection";
-  else if (!/^[a-zA-Z0-9_-]+$/.test(name)) problems.name = "Use letters, numbers, - and _ only";
-  else if (name.includes("__")) problems.name = "Use one _ at a time; __ separates a connection from its tools";
-  return problems;
+
+  return (
+    <>
+      <DialogHead onClose={onClose} title="Add a connection" />
+      <div className="dialog-body stack">
+        <div className="field">
+          <label htmlFor="catalog-search">Search</label>
+          <input
+            autoComplete="off"
+            id="catalog-search"
+            onChange={(event) => onQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || !query.trim() || !matches[0]) return;
+              event.preventDefault();
+              choose(matches[0]);
+            }}
+            ref={search}
+            spellCheck={false}
+            type="search"
+            value={query}
+          />
+        </div>
+        {matches.length > 0 ? (
+          <ul className="rows">
+            {matches.map((entry) => (
+              <li key={entry.id}>
+                <button className="row" onClick={() => choose(entry)} type="button">
+                  <Mark name={entry.id} />
+                  <span className="row-text">
+                    <strong>{entry.name}</strong>
+                    <small>{entry.description}</small>
+                  </span>
+                  {added.has(entry.id) ? <span className="note">Added</span> : null}
+                  <Chevron />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="quiet-text">No listed server matches “{query.trim()}”.</p>
+        )}
+      </div>
+      <div className="dialog-foot">
+        <p className="quiet-text foot-note">Not listed? Any MCP server works by URL or command.</p>
+        <button className="button" onClick={onCustom} type="button">
+          Custom connection
+        </button>
+      </div>
+    </>
+  );
 }
 
-function isHttpURL(value: string): boolean {
-  try {
-    return ["http:", "https:"].includes(new URL(value.trim()).protocol);
-  } catch {
-    return false;
+function EntryHead({ entry }: { entry: CatalogEntry }) {
+  return (
+    <div className="entry-head">
+      <Mark name={entry.id} />
+      <span className="row-text">
+        <span>{entry.description}</span>
+        <small>{howItConnects(entry)}</small>
+      </span>
+      <a href={entry.docs} rel="noreferrer" target="_blank">
+        Docs
+      </a>
+    </div>
+  );
+}
+
+function howItConnects(entry: CatalogEntry): string {
+  const connect = entry.connect;
+  if (connect.kind === "local") return `Jungle runs it on this machine with ${connect.command}`;
+  switch (connect.auth.kind) {
+    case "oauth":
+      return `You sign in to ${entry.name} in your browser next`;
+    case "oauth-app":
+      return `You sign in to ${entry.name} through an app you register`;
+    case "token":
+      return "Connects with a token you create";
+    case "none":
+      return "Needs no sign-in";
   }
-}
-
-function detectedProtocol(draft: Draft): Exclude<Transport, "stdio"> {
-  if (draft.protocol !== "detect") return draft.protocol;
-  try {
-    return new URL(draft.url.trim()).pathname.replace(/\/+$/, "").endsWith("/sse") ? "sse" : "streamable_http";
-  } catch {
-    return "streamable_http";
-  }
-}
-
-function lines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function pairsToMap(pairs: Pair[]): Record<string, string> | undefined {
-  const entries = pairs.filter((pair) => pair.key.trim()).map((pair) => [pair.key.trim(), pair.value] as const);
-  return entries.length ? Object.fromEntries(entries) : undefined;
-}
-
-function toInput(draft: Draft): NewConnection {
-  const base = { name: draft.name.trim(), description: draft.description.trim() || undefined, session_mode: draft.sessionMode };
-  if (draft.kind === "local") {
-    return { ...base, transport: "stdio", command: draft.command.trim(), args: lines(draft.args), env: pairsToMap(draft.env) };
-  }
-  const transport = detectedProtocol(draft);
-  return {
-    ...base,
-    transport,
-    url: draft.url.trim(),
-    bearer_token: draft.token.trim() || undefined,
-    headers: transport === "streamable_http" ? pairsToMap(draft.headers) : undefined,
-  };
-}
-
-const runners = new Set(["npx", "pnpx", "bunx", "uvx", "pipx", "docker", "node", "bun", "deno", "python", "python3", "uv", "pnpm"]);
-const runnerVerbs = new Set(["run", "dlx", "exec", "x"]);
-
-// Suggests a name from what the operator typed, until they type a name themselves:
-// https://mcp.asana.com/sse -> asana, npx -y @modelcontextprotocol/server-everything -> everything.
-function suggestName(draft: Draft): string {
-  let source = "";
-  if (draft.kind === "remote") {
-    try {
-      const host = new URL(draft.url.trim()).hostname;
-      if (host === "localhost" || /^[\d.:[\]]+$/.test(host)) return "";
-      const labels = host.split(".").filter((label) => !["www", "mcp", "api"].includes(label));
-      source = labels.length > 1 ? labels[labels.length - 2] : (labels[0] ?? "");
-    } catch {
-      return "";
-    }
-  } else {
-    const words = [draft.command.trim(), ...lines(draft.args)].filter((word) => word && !word.startsWith("-"));
-    const base = (word: string) => word.split("/").pop() ?? "";
-    let index = 0;
-    if (runners.has(base(words[0] ?? ""))) {
-      index = 1;
-      while (runnerVerbs.has(words[index] ?? "")) index += 1;
-    }
-    source = base(words[index] ?? "")
-      .replace(/@[^@]*$/, (version) => (version.length > 1 && /\d/.test(version) ? "" : version))
-      .replace(/\.(js|mjs|ts|py)$/, "")
-      .replace(/^(mcp[-_]server[-_]|server[-_]|mcp[-_])/, "")
-      .replace(/([-_]mcp[-_]server|[-_]mcp|[-_]server)$/, "");
-  }
-  return source
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/_{2,}/g, "_")
-    .replace(/^[-_]+|[-_]+$/g, "");
 }
 
 function discoveredSentence(connection: Connection | null, toolCount: number): string {

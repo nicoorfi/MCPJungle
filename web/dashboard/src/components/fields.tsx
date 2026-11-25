@@ -1,8 +1,7 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
+import type { Pair } from "@/lib/draft";
 
 // Form fields: a visible label above each control, hints above, errors below.
-
-export type Pair = { key: string; value: string };
 
 /** A radio drawn as a card, for a first decision whose options need a line of explanation. */
 export function Choice({
@@ -11,16 +10,18 @@ export function Choice({
   hint,
   checked,
   onSelect,
+  autoFocus,
 }: {
   group: string;
   label: string;
   hint: string;
   checked: boolean;
   onSelect: () => void;
+  autoFocus?: boolean;
 }) {
   return (
     <label className="choice">
-      <input checked={checked} name={group} onChange={onSelect} type="radio" />
+      <input autoFocus={autoFocus} checked={checked} name={group} onChange={onSelect} type="radio" />
       <span>
         <strong>{label}</strong>
         <small>{hint}</small>
@@ -40,6 +41,7 @@ export function TextField({
   type = "text",
   mono,
   autoComplete,
+  autoFocus,
 }: {
   label: string;
   value: string;
@@ -51,6 +53,7 @@ export function TextField({
   type?: "text" | "url";
   mono?: boolean;
   autoComplete?: string;
+  autoFocus?: boolean;
 }) {
   const id = useId();
   return (
@@ -68,6 +71,7 @@ export function TextField({
         aria-invalid={error ? true : undefined}
         aria-required={required}
         autoComplete={autoComplete}
+        autoFocus={autoFocus}
         className={mono ? "mono" : undefined}
         id={id}
         inputMode={type === "url" ? "url" : undefined}
@@ -86,18 +90,46 @@ export function TextField({
   );
 }
 
-export function SecretField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+export function SecretField({
+  label,
+  value,
+  onChange,
+  onBlur,
+  error,
+  hint,
+  required,
+  autoFocus,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onBlur?: () => void;
+  error?: string;
+  hint?: ReactNode;
+  required?: boolean;
+  autoFocus?: boolean;
+}) {
   const [shown, setShown] = useState(false);
   const id = useId();
   return (
     <div className="field">
       <label htmlFor={id}>
-        {label} <span className="optional">optional</span>
+        {label} {required ? null : <span className="optional">optional</span>}
       </label>
+      {hint ? (
+        <p className="hint" id={`${id}-hint`}>
+          {hint}
+        </p>
+      ) : null}
       <div className="input-with-action">
         <input
+          aria-describedby={[hint ? `${id}-hint` : "", error ? `${id}-error` : ""].filter(Boolean).join(" ") || undefined}
+          aria-invalid={error ? true : undefined}
+          aria-required={required}
           autoComplete="off"
+          autoFocus={autoFocus}
           id={id}
+          onBlur={onBlur}
           onChange={(event) => onChange(event.target.value)}
           spellCheck={false}
           type={shown ? "text" : "password"}
@@ -107,6 +139,11 @@ export function SecretField({ label, value, onChange }: { label: string; value: 
           {shown ? "Hide" : "Show"}
         </button>
       </div>
+      {error ? (
+        <p className="field-error" id={`${id}-error`}>
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

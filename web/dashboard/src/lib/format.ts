@@ -14,6 +14,8 @@ export const endpoints = {
   gateway: () => `${window.location.origin}/mcp`,
   sse: () => `${window.location.origin}/sse`,
   toolSet: (name: string) => `${window.location.origin}/v0/groups/${encodeURIComponent(name)}/mcp`,
+  /** Where upstream OAuth returns after sign-in; the backend derives the same URL from the request. */
+  oauthCallback: () => `${window.location.origin}/api/dashboard/oauth/callback`,
 };
 
 export const transportLabels: Record<Transport, string> = {

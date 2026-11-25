@@ -7,7 +7,7 @@ Read the [root guide](../../AGENTS.md) as well. This directory contains the deve
 - `src/App.tsx`: shell (wordmark, two destinations, footer) and the route switch.
 - `src/screens/`: one file per screen; each fetches only what it shows and owns its loading and error state.
 - `src/components/`: shared UI (`ui.tsx`), form fields, the native `<dialog>` wrapper and the add-connection dialog with its OAuth flow.
-- `src/lib/`: API helpers and contracts (`api.ts`, `types.ts`), hash routes (`route.ts`), `useFetch`/`invalidate`, the toast, and the tool set selection model (`selection.ts`).
+- `src/lib/`: API helpers and contracts (`api.ts`, `types.ts`), hash routes (`route.ts`), `useFetch`/`invalidate`, the toast, the tool set selection model (`selection.ts`), and the add-connection catalog and form draft (`catalog.ts`, `draft.ts`).
 - `src/styles.css`: the design tokens and all styling; pick from its scales.
 - The UI says connection, tool set, Pause/Resume and "available to agents"; the API says server and tool group. `types.ts` is where the two meet.
 - Follow strict TypeScript. Reuse components and helpers before adding dependencies, a router, or a state library.
