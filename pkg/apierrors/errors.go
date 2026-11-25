@@ -10,6 +10,10 @@ var ErrNotFound = errors.New("not found")
 // ErrInvalidInput is returned by service methods when user input is invalid (e.g. invalid mcp tool name).
 var ErrInvalidInput = errors.New("invalid user input")
 
+// ErrConflict is returned when a request is valid but the resource's current state cannot satisfy it.
+// Handlers map this to HTTP 409.
+var ErrConflict = errors.New("conflict")
+
 // ErrUpstreamOAuthRequired indicates that the upstream server requires OAuth
 // before registration can proceed.
 var ErrUpstreamOAuthRequired = errors.New("upstream OAuth authorization required")

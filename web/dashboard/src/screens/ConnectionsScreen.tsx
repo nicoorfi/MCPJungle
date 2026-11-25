@@ -52,9 +52,13 @@ export function ConnectionsScreen({ onAdd }: { onAdd: () => void }) {
                       <strong>{connection.name}</strong>
                       <small>{connectionSummary(connection)}</small>
                     </span>
-                    <span className="count">
-                      {connection.enabled ? `${availableTools(connection)} / ${connection.tool_count} tools` : "Paused"}
-                    </span>
+                    {connection.enabled && connection.sign_in === "required" ? (
+                      <span className="count attention">Sign-in required</span>
+                    ) : (
+                      <span className="count">
+                        {connection.enabled ? `${availableTools(connection)} / ${connection.tool_count} tools` : "Paused"}
+                      </span>
+                    )}
                     <Chevron />
                   </a>
                 </li>

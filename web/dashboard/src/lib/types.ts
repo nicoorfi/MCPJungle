@@ -27,6 +27,12 @@ export interface Connection {
   prompt_count: number;
   resource_count: number;
   config_summary: ConnectionConfig;
+  /**
+   * Set when the connection runs its own sign-in that ends on the gateway
+   * host's localhost: "required" after one of its tool results asked for it,
+   * "available" while it has a tool that starts one.
+   */
+  sign_in?: "required" | "available";
 }
 
 export interface Tool {
@@ -115,6 +121,14 @@ export interface OAuthRequired {
 export interface AddConnectionResult {
   name?: string;
   authorization_required?: OAuthRequired;
+}
+
+export interface SignInResult {
+  signed_in: boolean;
+  upstream_status?: number;
+  /** The read-only tool whose answer confirmed the sign-in. */
+  checked_with?: string;
+  error?: string;
 }
 
 export interface OAuthSession {

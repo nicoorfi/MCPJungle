@@ -336,6 +336,15 @@ Tool group create and update take `description`, `tools`, `servers` and `exclude
 - `GET /api/dashboard/oauth/callback`
 - `GET /api/dashboard/oauth/session/:id`
 
+#### Loopback sign-in endpoints
+
+For upstreams that run their own OAuth with a redirect to the gateway host's `localhost` (logic in internal/service/mcp/signin.go):
+
+- `POST /api/dashboard/servers/:name/sign-in` returns `{"authorization_url"}`, or 409 when the connection has no start-auth tool and no recent sign-in link.
+- `POST /api/dashboard/servers/:name/sign-in/complete` takes `{"url"}`, the address the browser landed on. It returns 400 when the address fails the trust rules, 502 with `error` when the upstream did not end signed in, and 200 with `signed_in`, `upstream_status` and `checked_with` otherwise.
+
+`GET /api/dashboard/servers` reports each connection's `sign_in` as `required` or `available`.
+
 ### Common patterns
 
 - Read handlers usually delegate to `dashboard.Service`

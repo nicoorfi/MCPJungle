@@ -6,6 +6,7 @@ import type {
   OAuthSession,
   Prompt,
   Resource,
+  SignInResult,
   Tool,
   ToolSet,
   ToolSetInput,
@@ -42,6 +43,11 @@ export const api = {
   deleteConnection: (connection: string) => request<unknown>("DELETE", `/servers/${segment(connection)}`),
   setConnectionEnabled: (connection: string, enabled: boolean) =>
     request<unknown>("PATCH", `/servers/${segment(connection)}/enabled`, { enabled }),
+  startSignIn: (connection: string) =>
+    request<{ authorization_url: string }>("POST", `/servers/${segment(connection)}/sign-in`).then((r) => r.authorization_url),
+  /** `url` is the address the browser landed on; it holds the authorization code, so it goes nowhere else. */
+  finishSignIn: (connection: string, url: string) =>
+    request<SignInResult>("POST", `/servers/${segment(connection)}/sign-in/complete`, { url }),
   setToolEnabled: (tool: string, enabled: boolean) =>
     request<unknown>("PATCH", `/tools/${segment(tool)}/enabled`, { enabled }),
   setPromptEnabled: (prompt: string, enabled: boolean) =>

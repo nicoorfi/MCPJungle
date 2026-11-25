@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { DeleteDialog } from "@/components/Dialog";
 import { Async, Chevron, CopyValue, Mark } from "@/components/ui";
 import { api, errorMessage } from "@/lib/api";
@@ -65,6 +65,7 @@ export function ConnectionScreen({ name }: { name: string }) {
   }
 
   const enabled = connection.enabled;
+  const signInRequired = enabled && connection.sign_in === "required";
   const togglePause = () =>
     run("pause", async () => {
       await api.setConnectionEnabled(name, !enabled);
@@ -100,8 +101,8 @@ export function ConnectionScreen({ name }: { name: string }) {
 
       <section aria-label="Status" className="panel status">
         <div>
-          <strong>{enabled ? "Enabled" : "Paused"}</strong>
-          <p className="quiet-text">{statusLine(connection)}</p>
+          {signInRequired ? <strong className="attention">Sign-in required</strong> : <strong>{enabled ? "Enabled" : "Paused"}</strong>}
+          <p className="quiet-text">{signInRequired ? "Its tools ask for a sign-in until you sign in again" : statusLine(connection)}</p>
         </div>
         <button aria-busy={busy.pause} className="button" disabled={busy.pause} onClick={togglePause} type="button">
           {busy.pause ? (enabled ? "Pausing…" : "Resuming…") : enabled ? "Pause" : "Resume"}
@@ -113,6 +114,8 @@ export function ConnectionScreen({ name }: { name: string }) {
           {error}
         </p>
       ) : null}
+
+      {enabled && connection.sign_in ? <SignInAgain key={name} name={name} required={signInRequired} /> : null}
 
       <section aria-labelledby="tools-heading" className="section">
         <h2 id="tools-heading">Tools</h2>
@@ -162,6 +165,117 @@ export function ConnectionScreen({ name }: { name: string }) {
         </p>
       </DeleteDialog>
     </>
+  );
+}
+
+/**
+ * Signs a connection in again when its own sign-in redirects to localhost on
+ * the gateway host. The consent tab cannot reach that address from here, so
+ * the operator pastes where it ended and the gateway delivers it.
+ */
+function SignInAgain({ name, required }: { name: string; required: boolean }) {
+  // Opens by itself when needed, then stays as the operator leaves it.
+  const [open, setOpen] = useState(required);
+  const [opening, setOpening] = useState(false);
+  const [blockedLink, setBlockedLink] = useState("");
+  const [openError, setOpenError] = useState("");
+  const [address, setAddress] = useState("");
+  const [finishing, setFinishing] = useState(false);
+  const [outcome, setOutcome] = useState<{ signedIn: true } | { error: string } | null>(null);
+  const fieldId = `sign-in-address-${name}`;
+
+  async function openSignInPage() {
+    setOpening(true);
+    setOpenError("");
+    setBlockedLink("");
+    // Open the tab inside the click, before the request, so the browser does
+    // not treat it as a popup. Cut its link back to this page before it loads.
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
+    try {
+      const link = await api.startSignIn(name);
+      if (tab) tab.location.replace(link);
+      else setBlockedLink(link);
+    } catch (failure) {
+      tab?.close();
+      setOpenError(errorMessage(failure));
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function finish(event: FormEvent) {
+    event.preventDefault();
+    setFinishing(true);
+    setOutcome(null);
+    try {
+      await api.finishSignIn(name, address);
+      setAddress("");
+      setOutcome({ signedIn: true });
+      invalidate();
+    } catch (failure) {
+      setOutcome({ error: errorMessage(failure) });
+    } finally {
+      setFinishing(false);
+    }
+  }
+
+  return (
+    <details className="disclosure sign-in" onToggle={(event) => setOpen(event.currentTarget.open)} open={open}>
+      <summary>Sign in to {name} again</summary>
+      <ol className="steps">
+        <li>
+          <button aria-busy={opening} className={required ? "button primary" : "button"} disabled={opening} onClick={openSignInPage} type="button">
+            {opening ? "Opening…" : "Open sign-in page"}
+          </button>
+          {blockedLink ? (
+            <p className="quiet-text">
+              The browser kept the tab from opening.{" "}
+              <a href={blockedLink} rel="noreferrer" target="_blank">
+                Open the sign-in page
+              </a>
+            </p>
+          ) : null}
+          {openError ? (
+            <p className="field-error" role="alert">
+              {openError}
+            </p>
+          ) : null}
+        </li>
+        <li>
+          <form className="field" noValidate onSubmit={finish}>
+            <label htmlFor={fieldId}>Address the tab ended on</label>
+            <p className="hint">The tab ends on a “can't connect” page at localhost. That is expected. Copy that page's address and paste it here.</p>
+            <div className="input-with-action">
+              <input
+                aria-describedby={outcome && "error" in outcome ? `${fieldId}-error` : undefined}
+                aria-invalid={outcome && "error" in outcome ? true : undefined}
+                autoComplete="off"
+                className="mono"
+                id={fieldId}
+                inputMode="url"
+                onChange={(event) => setAddress(event.target.value)}
+                spellCheck={false}
+                value={address}
+              />
+              <button aria-busy={finishing} className="button" disabled={finishing} type="submit">
+                {finishing ? "Finishing…" : "Finish"}
+              </button>
+            </div>
+            {outcome && "error" in outcome ? (
+              <p className="field-error" id={`${fieldId}-error`} role="alert">
+                {outcome.error}
+              </p>
+            ) : null}
+            {outcome && "signedIn" in outcome ? (
+              <p className="signed-in" role="status">
+                Signed in
+              </p>
+            ) : null}
+          </form>
+        </li>
+      </ol>
+    </details>
   );
 }
 

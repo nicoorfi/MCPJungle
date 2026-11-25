@@ -144,21 +144,11 @@ func (m *MCPService) InvokeTool(ctx context.Context, name string, args map[strin
 		return nil, fmt.Errorf("tool %s is disabled: %w", name, apierrors.ErrInvalidInput)
 	}
 
-	session, err := m.getSession(ctx, serverModel)
+	callToolResp, err := m.callTool(ctx, serverModel, toolRequest(toolName, args))
 	if err != nil {
-		return nil, err
-	}
-	defer session.closeIfApplicable()
-
-	callToolReq := mcp.CallToolRequest{}
-	callToolReq.Params.Name = toolName
-	callToolReq.Params.Arguments = args
-
-	callToolResp, err := session.client.CallTool(ctx, callToolReq)
-	if err != nil {
-		session.invalidateOnError(err) // Invalidate unhealthy stateful sessions
 		return nil, fmt.Errorf("failed to call tool %s on MCP server %s: %w", toolName, serverName, err)
 	}
+	m.signIns.observe(serverName, callToolResp, time.Now())
 
 	// NOTE: callToolResp.Content is a list of Content objects.
 	// If the tool returns a list as its result, it gets converted to a list of Content objects.
@@ -174,6 +164,22 @@ func (m *MCPService) InvokeTool(ctx context.Context, name string, args map[strin
 	outcome = telemetry.ToolCallOutcomeSuccess
 
 	return result, nil
+}
+
+// callTool sends one tool call, named as the upstream knows it, to the server's upstream.
+func (m *MCPService) callTool(ctx context.Context, s *model.McpServer, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	session, err := m.getSession(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	defer session.closeIfApplicable()
+
+	res, err := session.client.CallTool(ctx, req)
+	if err != nil {
+		session.invalidateOnError(err) // Invalidate unhealthy stateful sessions
+		return nil, err
+	}
+	return res, nil
 }
 
 // SetToolDeletionCallback registers a callback function to be called

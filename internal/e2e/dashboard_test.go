@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mcpjungle/mcpjungle/internal/model"
+	"github.com/mcpjungle/mcpjungle/pkg/testhelpers"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -493,6 +494,78 @@ func TestDashboardRegisterServerHandlesOAuth(t *testing.T) {
 	tools, err := proxyClient.ListTools(context.Background(), mcp.ListToolsRequest{})
 	require.NoError(t, err)
 	require.Contains(t, toolResultNames(tools.Tools), "oauthdash__echo")
+}
+
+// TestDashboardSignInRelay walks a loopback sign-in through the dashboard API:
+// an agent's call marks the connection, the dashboard mints a link, the
+// consent screen ends on localhost, and Jungle replays that address.
+func TestDashboardSignInRelay(t *testing.T) {
+	env := setupE2EServer(t, model.ModeDev)
+	upstream := testhelpers.NewSignInUpstream()
+	defer upstream.Close()
+
+	registerResp := env.do(t, http.MethodPost, "/api/dashboard/servers", map[string]any{
+		"name":      "demo",
+		"transport": "streamable_http",
+		"url":       upstream.URL,
+	}, "")
+	drain(registerResp)
+	require.Equal(t, http.StatusCreated, registerResp.StatusCode)
+
+	signInState := func() types.SignInState {
+		resp := env.do(t, http.MethodGet, "/api/dashboard/servers", nil, "")
+		defer drain(resp)
+		var payload types.DashboardServersResponse
+		decodeJSON(t, resp, &payload)
+		require.Len(t, payload.Servers, 1)
+		return payload.Servers[0].SignIn
+	}
+	require.Equal(t, types.SignInAvailable, signInState())
+
+	proxyClient := newMCPProxyClient(t, env, "")
+	call := mcp.CallToolRequest{}
+	call.Params.Name = "demo__list_items"
+	res, err := proxyClient.CallTool(context.Background(), call)
+	require.NoError(t, err)
+	require.True(t, res.IsError)
+	require.Equal(t, types.SignInRequired, signInState())
+
+	mintResp := env.do(t, http.MethodPost, "/api/dashboard/servers/demo/sign-in", nil, "")
+	defer drain(mintResp)
+	require.Equal(t, http.StatusOK, mintResp.StatusCode)
+	var link types.DashboardSignInLink
+	decodeJSON(t, mintResp, &link)
+
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	consentResp, err := noRedirect.Get(link.AuthorizationURL)
+	require.NoError(t, err)
+	consentResp.Body.Close()
+	require.Equal(t, http.StatusFound, consentResp.StatusCode)
+	landed := consentResp.Header.Get("Location")
+	require.True(t, strings.HasPrefix(landed, "http://localhost:"), landed)
+
+	wrongPath := strings.Replace(landed, "/oauth2callback", "/mcp", 1)
+	refusedResp := env.do(t, http.MethodPost, "/api/dashboard/servers/demo/sign-in/complete", map[string]string{"url": wrongPath}, "")
+	defer drain(refusedResp)
+	require.Equal(t, http.StatusBadRequest, refusedResp.StatusCode)
+	refusal := readBody(t, refusedResp)
+	require.Contains(t, refusal, "must end at /oauth2callback")
+	landedURL, err := url.Parse(landed)
+	require.NoError(t, err)
+	require.NotContains(t, refusal, landedURL.Query().Get("code"))
+
+	completeResp := env.do(t, http.MethodPost, "/api/dashboard/servers/demo/sign-in/complete", map[string]string{"url": landed}, "")
+	defer drain(completeResp)
+	require.Equal(t, http.StatusOK, completeResp.StatusCode)
+	var result types.SignInResult
+	decodeJSON(t, completeResp, &result)
+	require.Equal(t, types.SignInResult{SignedIn: true, UpstreamStatus: http.StatusOK, CheckedWith: "list_items"}, result)
+	require.True(t, upstream.SignedIn())
+	require.Equal(t, types.SignInAvailable, signInState())
+
+	res, err = proxyClient.CallTool(context.Background(), call)
+	require.NoError(t, err)
+	require.False(t, res.IsError)
 }
 
 func TestDashboardOAuthCallbackMissingParams(t *testing.T) {

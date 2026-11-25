@@ -52,6 +52,9 @@ type MCPService struct {
 
 	// sessionManager manages persistent connections for MCP servers configured in stateful mode.
 	sessionManager *SessionManager
+
+	// signIns tracks upstreams whose tool results ask for their own loopback sign-in.
+	signIns signInTracker
 }
 
 // NewMCPService creates a new instance of MCPService.

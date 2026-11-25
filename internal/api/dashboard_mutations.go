@@ -151,3 +151,40 @@ func (s *Server) dashboardSetPromptEnabledHandler() gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"name": entity, "enabled": input.Enabled})
 	}
 }
+
+// dashboardMintSignInHandler returns a fresh consent link for a connection
+// that runs its own sign-in with a loopback redirect.
+func (s *Server) dashboardMintSignInHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		link, err := s.mcpService.MintSignIn(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			handleServiceError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, types.DashboardSignInLink{AuthorizationURL: link})
+	}
+}
+
+// dashboardCompleteSignInHandler relays the address the browser landed on to
+// the connection's loopback callback. The trust rules live in the MCP service
+// (signInCallbackTarget). A refused address is 400; a replay that did not end
+// signed in is 502 with the reason.
+func (s *Server) dashboardCompleteSignInHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input types.DashboardSignInCompleteRequest
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, types.APIErrorResponse{Error: "Paste the address the sign-in page ended on"})
+			return
+		}
+		result, err := s.mcpService.CompleteSignIn(c.Request.Context(), c.Param("name"), input.URL)
+		if err != nil {
+			handleServiceError(c, err)
+			return
+		}
+		status := http.StatusOK
+		if !result.SignedIn {
+			status = http.StatusBadGateway
+		}
+		c.JSON(status, result)
+	}
+}

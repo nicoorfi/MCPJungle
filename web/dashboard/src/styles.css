@@ -4,7 +4,7 @@
  *   space   4 8 12 16 20 24 32 48
  *   type    12 13 14 15 (body) 17 24 28; the wordmark and marks are drawn sizes
  *   radius  7 (controls) 10 (surfaces, marks) 999 (switch)
- *   color   greys, one accent, danger
+ *   color   greys, one accent, danger, warn (needs the operator, harms nothing)
  */
 :root {
   color-scheme: light;
@@ -23,6 +23,7 @@
   --danger: #c10007;
   --danger-strong: #b00006;
   --danger-soft: #fcebec;
+  --warn: #85560f;
   --ring: #1b4ed8;
   --backdrop: rgb(24 24 27 / 0.32);
   --shadow-dialog: 0 24px 64px rgb(24 24 27 / 0.16), 0 2px 8px rgb(24 24 27 / 0.08);
@@ -65,6 +66,7 @@
     --danger: #ff6467;
     --danger-strong: #ff7b7e;
     --danger-soft: #2d1214;
+    --warn: #e6c07c;
     --ring: #6a95f6;
     --backdrop: rgb(0 0 0 / 0.6);
     --shadow-dialog: 0 24px 64px rgb(0 0 0 / 0.55), 0 0 0 1px #262628;
@@ -328,6 +330,11 @@ main {
 
 .subhead .count {
   color: var(--muted);
+}
+
+/* A state that waits on the operator, such as a connection that needs a sign-in. */
+.attention {
+  color: var(--warn);
 }
 
 .stack {
@@ -866,6 +873,31 @@ input[type="radio"] {
 
 .disclosure > :not(summary) {
   margin-top: 12px;
+}
+
+/* An ordered list for its meaning; the button and the field already read as two steps. */
+.sign-in .steps {
+  display: grid;
+  gap: 20px;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 14px;
+  list-style: none;
+}
+
+.sign-in .steps > li {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.sign-in .steps > li > .field {
+  justify-self: stretch;
+}
+
+.signed-in {
+  font-weight: 500;
 }
 
 .technical .facts {

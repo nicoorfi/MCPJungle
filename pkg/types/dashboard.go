@@ -32,6 +32,40 @@ type DashboardServer struct {
 	UpdatedAt         string                       `json:"updated_at,omitempty"`
 	ConnectionSummary string                       `json:"connection_summary"`
 	ConfigSummary     DashboardServerConfigSummary `json:"config_summary"`
+	SignIn            SignInState                  `json:"sign_in,omitempty"`
+}
+
+// SignInState is what the gateway knows about an upstream that runs its own
+// sign-in with a redirect to the gateway host's loopback. Empty when neither
+// applies.
+type SignInState string
+
+const (
+	// SignInAvailable means the upstream has a tool that starts a sign-in.
+	SignInAvailable SignInState = "available"
+	// SignInRequired means the upstream's last tool result handed out a sign-in link.
+	SignInRequired SignInState = "required"
+)
+
+// DashboardSignInLink is a fresh consent link for an upstream's own sign-in.
+type DashboardSignInLink struct {
+	AuthorizationURL string `json:"authorization_url"`
+}
+
+// DashboardSignInCompleteRequest carries the address the operator's browser
+// landed on after the consent screen.
+type DashboardSignInCompleteRequest struct {
+	URL string `json:"url"`
+}
+
+// SignInResult is what relaying a sign-in callback to an upstream did.
+type SignInResult struct {
+	SignedIn bool `json:"signed_in"`
+	// UpstreamStatus is the HTTP status the upstream's callback answered; 0 when it was not reached.
+	UpstreamStatus int `json:"upstream_status,omitempty"`
+	// CheckedWith names the read-only tool whose result confirmed the sign-in.
+	CheckedWith string `json:"checked_with,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type DashboardServersResponse struct {

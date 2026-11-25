@@ -59,27 +59,20 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 		)
 	}
 
-	session, err := m.getSession(ctx, server)
-	if err != nil {
-		outcome = telemetry.ToolCallOutcomeError
-		return nil, err
-	}
-	defer session.closeIfApplicable()
-
 	// Ensure the tool name is set correctly, ie, without the server name prefix
 	request.Params.Name = toolName
 	// Do not let any client-sent headers get forwarded to the upstream MCP server.
 	// See https://github.com/mcpjungle/MCPJungle/issues/252
 	request.Header = nil
 
-	res, err := session.client.CallTool(ctx, request)
+	// forward the request to the upstream MCP server and relay the response back
+	res, err := m.callTool(ctx, server, request)
 	if err != nil {
 		outcome = telemetry.ToolCallOutcomeError
-		session.invalidateOnError(err) // Invalidate unhealthy stateful sessions
+		return nil, err
 	}
-
-	// forward the request to the upstream MCP server and relay the response back
-	return res, err
+	m.signIns.observe(serverName, res, time.Now())
+	return res, nil
 }
 
 // mcpProxyResourceHandler handles resource reads for the MCP proxy server

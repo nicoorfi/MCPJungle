@@ -52,6 +52,12 @@ func TestHandleServiceError(t *testing.T) {
 			expectedBody:   "invalid access token",
 		},
 		{
+			name:           "wrapped ErrConflict returns 409",
+			err:            fmt.Errorf("no sign-in link: %w", apierrors.ErrConflict),
+			expectedStatus: http.StatusConflict,
+			expectedBody:   "no sign-in link",
+		},
+		{
 			name:           "unrelated error returns 500",
 			err:            errors.New("db connection refused"),
 			expectedStatus: http.StatusInternalServerError,

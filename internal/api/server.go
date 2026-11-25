@@ -365,6 +365,8 @@ func (s *Server) setupRouter() (*gin.Engine, error) {
 			dashboardAPI.GET("/oauth/session/:id", s.dashboardOAuthSessionHandler())
 			dashboardAPI.DELETE("/servers/:name", s.dashboardDeleteServerHandler())
 			dashboardAPI.PATCH("/servers/:name/enabled", s.dashboardSetServerEnabledHandler())
+			dashboardAPI.POST("/servers/:name/sign-in", s.dashboardMintSignInHandler())
+			dashboardAPI.POST("/servers/:name/sign-in/complete", s.dashboardCompleteSignInHandler())
 			dashboardAPI.GET("/tools", s.dashboardToolsHandler())
 			dashboardAPI.PATCH("/tools/:name/enabled", s.dashboardSetToolEnabledHandler())
 			dashboardAPI.GET("/tool-groups", s.dashboardToolGroupsHandler())

@@ -172,6 +172,7 @@ func (m *MCPService) DeregisterMcpServer(name string) error {
 
 	// Close any stateful session associated with this server
 	m.sessionManager.CloseSession(name)
+	m.signIns.forget(name)
 
 	return nil
 }

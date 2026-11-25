@@ -14,6 +14,15 @@ func (s *Server) dashboardServersHandler() gin.HandlerFunc {
 			handleServiceError(c, err)
 			return
 		}
+		// Sign-in state lives in memory in the MCP service, not in the rows the dashboard service reads.
+		states, err := s.mcpService.SignInStates()
+		if err != nil {
+			handleServiceError(c, err)
+			return
+		}
+		for i := range resp.Servers {
+			resp.Servers[i].SignIn = states[resp.Servers[i].Name]
+		}
 		c.JSON(http.StatusOK, resp)
 	}
 }
