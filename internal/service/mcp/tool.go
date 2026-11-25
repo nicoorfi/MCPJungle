@@ -136,6 +136,13 @@ func (m *MCPService) InvokeTool(ctx context.Context, name string, args map[strin
 			err,
 		)
 	}
+	tool, err := m.GetTool(name)
+	if err != nil {
+		return nil, err
+	}
+	if !tool.Enabled {
+		return nil, fmt.Errorf("tool %s is disabled: %w", name, apierrors.ErrInvalidInput)
+	}
 
 	session, err := m.getSession(ctx, serverModel)
 	if err != nil {

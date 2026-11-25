@@ -95,6 +95,13 @@ func (m *MCPService) GetPromptWithArgs(ctx context.Context, name string, args ma
 			err,
 		)
 	}
+	prompt, err := m.GetPrompt(name)
+	if err != nil {
+		return nil, err
+	}
+	if !prompt.Enabled {
+		return nil, fmt.Errorf("prompt %s is disabled: %w", name, apierrors.ErrInvalidInput)
+	}
 
 	session, err := m.getSession(ctx, serverModel)
 	if err != nil {

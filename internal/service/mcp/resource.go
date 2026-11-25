@@ -156,6 +156,9 @@ func (m *MCPService) ReadResource(ctx context.Context, uri string) (*types.Resou
 	if err != nil {
 		return nil, err
 	}
+	if !resource.Enabled {
+		return nil, fmt.Errorf("resource %s is disabled: %w", uri, apierrors.ErrInvalidInput)
+	}
 
 	session, err := m.getSession(ctx, &resource.Server)
 	if err != nil {

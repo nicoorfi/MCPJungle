@@ -430,6 +430,14 @@ func TestPauseResumeMcpServer_KeepsItemChoices(t *testing.T) {
 	_, ok = service.GetToolInstance("test-server__delete")
 	assert.False(t, ok)
 
+	// an item disabled on its own refuses direct invocation on an enabled server
+	_, err = service.InvokeTool(context.Background(), "test-server__delete", map[string]any{})
+	require.ErrorIs(t, err, apierrors.ErrInvalidInput)
+	_, err = service.GetPromptWithArgs(context.Background(), "test-server__draft", map[string]any{})
+	require.ErrorIs(t, err, apierrors.ErrInvalidInput)
+	_, err = service.ReadResource(context.Background(), secret.URI)
+	require.ErrorIs(t, err, apierrors.ErrInvalidInput)
+
 	// resuming an enabled server changes nothing
 	resumedTools, resumedPrompts, err := service.EnableMcpServer("test-server")
 	require.NoError(t, err)
