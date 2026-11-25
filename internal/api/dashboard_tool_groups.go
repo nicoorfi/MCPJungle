@@ -32,9 +32,8 @@ func (r dashboardToolGroupRequest) toModel(name string) *model.ToolGroup {
 	}
 }
 
-// jsonList encodes an empty list as [], never null, because UpdateToolGroup
-// saves with GORM Updates, which skips nil fields and would keep a list the
-// operator just cleared.
+// jsonList encodes an empty list as [], never null, so a list the operator
+// cleared is stored as an empty list.
 func jsonList(values []string) []byte {
 	if values == nil {
 		values = []string{}
