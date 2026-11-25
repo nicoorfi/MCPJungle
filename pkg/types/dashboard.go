@@ -1,44 +1,9 @@
 package types
 
-type DashboardStatus string
-
-const (
-	DashboardStatusRunning  DashboardStatus = "running"
-	DashboardStatusDegraded DashboardStatus = "degraded"
-	DashboardStatusUnknown  DashboardStatus = "unknown"
-)
-
-type DashboardServerStatus string
-
-const (
-	DashboardServerStatusConnected DashboardServerStatus = "connected"
-	DashboardServerStatusReachable DashboardServerStatus = "reachable"
-	DashboardServerStatusFailed    DashboardServerStatus = "failed"
-	DashboardServerStatusUnknown   DashboardServerStatus = "unknown"
-)
-
-type DashboardEndpoint struct {
-	Label string `json:"label"`
-	URL   string `json:"url"`
-}
-
 type DashboardEmptyState struct {
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Commands    []string `json:"commands,omitempty"`
-}
-
-type DashboardOverviewResponse struct {
-	Status          DashboardStatus      `json:"status"`
-	Mode            string               `json:"mode"`
-	Version         string               `json:"version"`
-	Endpoints       []DashboardEndpoint  `json:"endpoints"`
-	ServerCount     int                  `json:"server_count"`
-	ToolCount       int                  `json:"tool_count"`
-	PromptCount     int                  `json:"prompt_count"`
-	ResourceCount   int                  `json:"resource_count"`
-	EmptyState      *DashboardEmptyState `json:"empty_state,omitempty"`
-	Troubleshooting []string             `json:"troubleshooting,omitempty"`
 }
 
 type DashboardServerConfigSummary struct {
@@ -54,18 +19,19 @@ type DashboardServerConfigSummary struct {
 }
 
 type DashboardServer struct {
-	Name               string                       `json:"name"`
-	Transport          string                       `json:"transport"`
-	Enabled            bool                         `json:"enabled"`
-	Status             DashboardServerStatus        `json:"status"`
-	ToolCount          int                          `json:"tool_count"`
-	PromptCount        int                          `json:"prompt_count"`
-	ResourceCount      int                          `json:"resource_count"`
-	LastDiscoveredAt   string                       `json:"last_discovered_at,omitempty"`
-	UpdatedAt          string                       `json:"updated_at,omitempty"`
-	ConnectionSummary  string                       `json:"connection_summary"`
-	ConfigSummary      DashboardServerConfigSummary `json:"config_summary"`
-	NamespacedExamples []string                     `json:"namespaced_examples,omitempty"`
+	Name      string `json:"name"`
+	Transport string `json:"transport"`
+	Enabled   bool   `json:"enabled"`
+	ToolCount int    `json:"tool_count"`
+	// EnabledToolCount counts tools whose own switch is on. Agents see a tool
+	// only while both that switch and its server are on.
+	EnabledToolCount  int                          `json:"enabled_tool_count"`
+	PromptCount       int                          `json:"prompt_count"`
+	ResourceCount     int                          `json:"resource_count"`
+	LastDiscoveredAt  string                       `json:"last_discovered_at,omitempty"`
+	UpdatedAt         string                       `json:"updated_at,omitempty"`
+	ConnectionSummary string                       `json:"connection_summary"`
+	ConfigSummary     DashboardServerConfigSummary `json:"config_summary"`
 }
 
 type DashboardServersResponse struct {
@@ -76,6 +42,7 @@ type DashboardServersResponse struct {
 type DashboardTool struct {
 	Name           string         `json:"name"`
 	CanonicalName  string         `json:"canonical_name"`
+	Title          string         `json:"title"`
 	Server         string         `json:"server"`
 	Description    string         `json:"description"`
 	Enabled        bool           `json:"enabled"`
@@ -83,7 +50,6 @@ type DashboardTool struct {
 	InputSchema    map[string]any `json:"input_schema,omitempty"`
 	InputPreview   string         `json:"input_preview,omitempty"`
 	Transport      string         `json:"transport,omitempty"`
-	ServerStatus   string         `json:"server_status,omitempty"`
 	AnnotationKeys []string       `json:"annotation_keys,omitempty"`
 }
 
@@ -95,6 +61,7 @@ type DashboardToolsResponse struct {
 type DashboardPrompt struct {
 	Name             string           `json:"name"`
 	CanonicalName    string           `json:"canonical_name"`
+	Title            string           `json:"title"`
 	Server           string           `json:"server"`
 	Description      string           `json:"description"`
 	Enabled          bool             `json:"enabled"`
@@ -102,7 +69,6 @@ type DashboardPrompt struct {
 	Arguments        []map[string]any `json:"arguments,omitempty"`
 	ArgumentsPreview string           `json:"arguments_preview,omitempty"`
 	Transport        string           `json:"transport,omitempty"`
-	ServerStatus     string           `json:"server_status,omitempty"`
 }
 
 type DashboardPromptsResponse struct {
@@ -111,14 +77,13 @@ type DashboardPromptsResponse struct {
 }
 
 type DashboardResource struct {
-	URI          string `json:"uri"`
-	Name         string `json:"name"`
-	Server       string `json:"server"`
-	Description  string `json:"description"`
-	MIMEType     string `json:"mime_type,omitempty"`
-	Enabled      bool   `json:"enabled"`
-	Transport    string `json:"transport,omitempty"`
-	ServerStatus string `json:"server_status,omitempty"`
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Server      string `json:"server"`
+	Description string `json:"description"`
+	MIMEType    string `json:"mime_type,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Transport   string `json:"transport,omitempty"`
 }
 
 type DashboardResourcesResponse struct {

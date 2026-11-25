@@ -23,7 +23,7 @@ func TestDashboardRootServedInDevMode(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body := readBody(t, resp)
-	require.Contains(t, body, "MCPJungle Dashboard")
+	require.Contains(t, body, "<title>Jungle</title>")
 }
 
 func TestDashboardRootHiddenInEnterpriseMode(t *testing.T) {
@@ -38,7 +38,7 @@ func TestDashboardRootHiddenInEnterpriseMode(t *testing.T) {
 func TestDashboardAPIHiddenInEnterpriseMode(t *testing.T) {
 	env := setupE2EServer(t, model.ModeEnterprise)
 
-	resp := env.do(t, http.MethodGet, "/api/dashboard/overview", nil, env.adminToken)
+	resp := env.do(t, http.MethodGet, "/api/dashboard/servers", nil, env.adminToken)
 	defer drain(resp)
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -46,15 +46,6 @@ func TestDashboardAPIHiddenInEnterpriseMode(t *testing.T) {
 
 func TestDashboardAPIEmptyStates(t *testing.T) {
 	env := setupE2EServer(t, model.ModeDev)
-
-	overviewResp := env.do(t, http.MethodGet, "/api/dashboard/overview", nil, "")
-	defer drain(overviewResp)
-	require.Equal(t, http.StatusOK, overviewResp.StatusCode)
-
-	var overview map[string]any
-	decodeJSON(t, overviewResp, &overview)
-	require.Equal(t, float64(0), overview["server_count"])
-	require.NotNil(t, overview["empty_state"])
 
 	serversResp := env.do(t, http.MethodGet, "/api/dashboard/servers", nil, "")
 	defer drain(serversResp)
@@ -71,7 +62,6 @@ func TestDashboardAPIValidJSON(t *testing.T) {
 	registerEverythingServer(t, env, "")
 
 	paths := []string{
-		"/api/dashboard/overview",
 		"/api/dashboard/servers",
 		"/api/dashboard/tools",
 		"/api/dashboard/tool-groups",
@@ -142,6 +132,9 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 	server := servers[0].(map[string]any)
 	require.Equal(t, "dashsrv", server["name"])
 	require.Equal(t, true, server["enabled"])
+	require.NotContains(t, server, "status")
+	require.Greater(t, server["tool_count"].(float64), float64(0))
+	require.Equal(t, server["tool_count"], server["enabled_tool_count"])
 
 	toolsResp := env.do(t, http.MethodGet, "/api/dashboard/tools", nil, "")
 	defer drain(toolsResp)
@@ -151,6 +144,8 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 	require.NotEmpty(t, toolsPayload["tools"])
 	firstTool := toolsPayload["tools"].([]any)[0].(map[string]any)
 	require.Equal(t, true, firstTool["enabled"])
+	require.NotEmpty(t, firstTool["title"])
+	require.NotContains(t, firstTool, "server_status")
 
 	promptsResp := env.do(t, http.MethodGet, "/api/dashboard/prompts", nil, "")
 	defer drain(promptsResp)
@@ -234,14 +229,15 @@ func TestDashboardMutationsAndProxyExposure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, promptResultNames(promptsAfterServerDisable.Prompts), "dashsrv__simple-prompt")
 
-	overviewResp := env.do(t, http.MethodGet, "/api/dashboard/overview", nil, "")
-	defer drain(overviewResp)
-	require.Equal(t, http.StatusOK, overviewResp.StatusCode)
-	var overview map[string]any
-	decodeJSON(t, overviewResp, &overview)
-	require.Equal(t, float64(1), overview["server_count"])
-	require.Greater(t, overview["tool_count"].(float64), float64(0))
-	require.Greater(t, overview["prompt_count"].(float64), float64(0))
+	pausedServersResp := env.do(t, http.MethodGet, "/api/dashboard/servers", nil, "")
+	defer drain(pausedServersResp)
+	require.Equal(t, http.StatusOK, pausedServersResp.StatusCode)
+	var pausedServersPayload map[string]any
+	decodeJSON(t, pausedServersResp, &pausedServersPayload)
+	pausedServer := pausedServersPayload["servers"].([]any)[0].(map[string]any)
+	require.Equal(t, false, pausedServer["enabled"])
+	require.Greater(t, pausedServer["tool_count"].(float64), float64(0))
+	require.Greater(t, pausedServer["prompt_count"].(float64), float64(0))
 
 	enableServerResp := env.do(t, http.MethodPatch, "/api/dashboard/servers/dashsrv/enabled", map[string]any{
 		"enabled": true,
@@ -320,6 +316,43 @@ func TestDashboardToolGroupsCRUDAndValidation(t *testing.T) {
 	require.Equal(t, "coding", fetched["name"])
 	tools := fetched["tools"].([]any)
 	require.Len(t, tools, 2)
+	require.Equal(t, []any{"everything__echo", "everything__get-sum"}, fetched["included_tools"])
+	require.Equal(t, []any{}, fetched["included_servers"])
+
+	missingResp := env.do(t, http.MethodPut, "/api/dashboard/tool-groups/missing", map[string]any{
+		"tools": []string{"everything__echo"},
+	}, "")
+	defer drain(missingResp)
+	require.Equal(t, http.StatusNotFound, missingResp.StatusCode)
+
+	// Switch from two picked tools to the whole server minus one tool. The
+	// cleared tools list must stay cleared.
+	updateResp := env.do(t, http.MethodPut, "/api/dashboard/tool-groups/coding", map[string]any{
+		"description":    "Everything but echo",
+		"tools":          []string{},
+		"servers":        []string{"everything"},
+		"excluded_tools": []string{"everything__echo"},
+	}, "")
+	defer drain(updateResp)
+	require.Equal(t, http.StatusOK, updateResp.StatusCode)
+	var updated map[string]any
+	decodeJSON(t, updateResp, &updated)
+	require.Equal(t, "Everything but echo", updated["description"])
+	require.Equal(t, []any{}, updated["included_tools"])
+	require.Equal(t, []any{"everything"}, updated["included_servers"])
+	require.Equal(t, []any{"everything__echo"}, updated["excluded_tools"])
+	updatedNames := make([]string, 0)
+	for _, item := range updated["tools"].([]any) {
+		updatedNames = append(updatedNames, item.(map[string]any)["canonical_name"].(string))
+	}
+	require.Contains(t, updatedNames, "everything__get-sum")
+	require.NotContains(t, updatedNames, "everything__echo")
+	require.Equal(t, float64(len(updatedNames)), updated["tool_count"])
+
+	groupClient := newGroupMCPClient(t, env, "coding", "")
+	groupTools, err := groupClient.ListTools(context.Background(), mcp.ListToolsRequest{})
+	require.NoError(t, err)
+	require.ElementsMatch(t, updatedNames, toolResultNames(groupTools.Tools))
 
 	deleteResp := env.do(t, http.MethodDelete, "/api/dashboard/tool-groups/coding", nil, "")
 	defer drain(deleteResp)
