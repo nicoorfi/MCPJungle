@@ -104,6 +104,8 @@ test("a connection is known by its endpoint before its name", () => {
   assert.equal(brandFor(misnamed)?.id, "linear");
   const local = connection("files", { kind: "stdio", command: "npx", target: "npx @modelcontextprotocol/server-filesystem /srv" });
   assert.equal(brandFor(local)?.id, "filesystem");
+  const docs = connection("docs", { kind: "streamable_http", target: "https://sigmie.com/mcp" });
+  assert.equal(brandFor(docs)?.id, "sigmie");
 });
 
 test("a custom install falls back to its name; anything else keeps the letter", () => {

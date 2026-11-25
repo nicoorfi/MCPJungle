@@ -107,6 +107,13 @@ export const catalog: CatalogEntry[] = [
     connect: { kind: "remote", url: "https://mcp.context7.com/mcp", auth: { kind: "none" } },
   },
   {
+    id: "sigmie",
+    name: "Sigmie",
+    description: "Search and read the Sigmie docs",
+    docs: "https://sigmie.com/docs/v2/mcp",
+    connect: { kind: "remote", url: "https://sigmie.com/mcp", auth: { kind: "none" } },
+  },
+  {
     id: "filesystem",
     name: "Filesystem",
     description: "Read and write files in one folder",
