@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"testing"
@@ -55,7 +56,7 @@ func TestParseSignInLink(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			link, ok := parseSignInLink(tt.text, now)
+			link, ok := parseSignInLink(tt.text, now, func(*url.URL) bool { return true })
 			if tt.wantState == "" {
 				assert.False(t, ok)
 				return
@@ -123,16 +124,17 @@ func TestSignInCallbackTarget(t *testing.T) {
 
 func TestSignInTracker_StatusFollowsResults(t *testing.T) {
 	var tracker signInTracker
+	google := &model.McpServer{Name: "google", Transport: types.TransportStdio}
 	now := time.Now()
 	asks := mcp.NewToolResultError("Authorization URL: " + workspaceMCPLink)
 
-	assert.True(t, tracker.observe("google", asks, now))
+	assert.True(t, tracker.observe(google, asks, now))
 	assert.True(t, tracker.isRequired("google"))
 
-	assert.False(t, tracker.observe("google", mcp.NewToolResultError("calendar not found"), now))
+	assert.False(t, tracker.observe(google, mcp.NewToolResultError("calendar not found"), now))
 	assert.True(t, tracker.isRequired("google"), "an error without a link says nothing about the sign-in")
 
-	assert.False(t, tracker.observe("google", mcp.NewToolResultText("3 calendars"), now))
+	assert.False(t, tracker.observe(google, mcp.NewToolResultText("3 calendars"), now))
 	assert.False(t, tracker.isRequired("google"))
 
 	link, ok := tracker.latest("google", now)
@@ -285,4 +287,23 @@ func consent(t *testing.T, link string) *url.URL {
 	landed, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
 	return landed
+}
+
+func TestOwnsCallback(t *testing.T) {
+	redirect, err := url.Parse("http://localhost:8010/oauth2callback")
+	require.NoError(t, err)
+	remote := func(rawURL string) *model.McpServer {
+		cfg, err := json.Marshal(model.StreamableHTTPConfig{URL: rawURL})
+		require.NoError(t, err)
+		return &model.McpServer{Name: "x", Transport: types.TransportStreamableHTTP, Config: cfg}
+	}
+
+	assert.True(t, ownsCallback(&model.McpServer{Name: "x", Transport: types.TransportStdio}, redirect), "a local command runs here")
+	assert.True(t, ownsCallback(remote("http://127.0.0.1:8010/mcp"), redirect), "a loopback server names its own port")
+	assert.False(t, ownsCallback(remote("http://127.0.0.1:9000/mcp"), redirect), "a loopback server cannot name another local port")
+	assert.False(t, ownsCallback(remote("https://sigmie.com/mcp"), redirect), "a remote server cannot name a local callback")
+
+	text := "Authorization URL: " + workspaceMCPLink
+	_, found := findSignInLink(remote("https://sigmie.com/mcp"), mcp.NewToolResultText(text), time.Now())
+	assert.False(t, found, "a remote server's link is not recorded")
 }

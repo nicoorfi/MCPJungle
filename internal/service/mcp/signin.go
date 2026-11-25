@@ -62,8 +62,9 @@ type signInTracker struct {
 // reports whether the result asked for one. A consent link marks the server;
 // a successful result without one clears the mark. An error result without a
 // link says nothing about the sign-in, so it leaves the mark as it is.
-func (t *signInTracker) observe(server string, res *mcp.CallToolResult, now time.Time) bool {
-	link, found := findSignInLink(res, now)
+func (t *signInTracker) observe(s *model.McpServer, res *mcp.CallToolResult, now time.Time) bool {
+	server := s.Name
+	link, found := findSignInLink(s, res, now)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch {
@@ -156,14 +157,16 @@ func (t *signInTracker) forget(server string) {
 // a quote or bracket, the characters that wrap links in Markdown and HTML.
 var linkPattern = regexp.MustCompile(`https?://[^\s"'<>()\[\]]+`)
 
-// findSignInLink returns the first consent link in the result's text content.
-func findSignInLink(res *mcp.CallToolResult, now time.Time) (pendingSignIn, bool) {
+// findSignInLink returns the first consent link in the result's text content
+// whose callback the server may name (ownsCallback).
+func findSignInLink(s *model.McpServer, res *mcp.CallToolResult, now time.Time) (pendingSignIn, bool) {
+	owns := func(redirect *url.URL) bool { return ownsCallback(s, redirect) }
 	for _, content := range res.Content {
 		text, ok := mcp.AsTextContent(content)
 		if !ok {
 			continue
 		}
-		if link, ok := parseSignInLink(text.Text, now); ok {
+		if link, ok := parseSignInLink(text.Text, now, owns); ok {
 			return link, true
 		}
 	}
@@ -173,7 +176,7 @@ func findSignInLink(res *mcp.CallToolResult, now time.Time) (pendingSignIn, bool
 // parseSignInLink returns the first URL in text that carries a state and a
 // redirect_uri Jungle can replay. Without a state, Jungle could not tell that
 // link's callback from any other loopback URL, so such a link does not count.
-func parseSignInLink(text string, now time.Time) (pendingSignIn, bool) {
+func parseSignInLink(text string, now time.Time, owns func(*url.URL) bool) (pendingSignIn, bool) {
 	for _, raw := range linkPattern.FindAllString(text, -1) {
 		// Sentence punctuation and Markdown emphasis that follow a bare link.
 		raw = strings.TrimRight(raw, ".,;:!?*_")
@@ -184,7 +187,7 @@ func parseSignInLink(text string, now time.Time) (pendingSignIn, bool) {
 		query := u.Query()
 		state := query.Get("state")
 		redirect, err := url.Parse(query.Get("redirect_uri"))
-		if err != nil || state == "" || !isRelayableRedirect(redirect) {
+		if err != nil || state == "" || !isRelayableRedirect(redirect) || !owns(redirect) {
 			continue
 		}
 		return pendingSignIn{authURL: raw, redirect: redirect, state: state, seenAt: now}, true
@@ -199,6 +202,43 @@ func parseSignInLink(text string, now time.Time) (pendingSignIn, bool) {
 func isRelayableRedirect(u *url.URL) bool {
 	host := strings.ToLower(u.Hostname())
 	return u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1")
+}
+
+// ownsCallback reports whether s may name redirect as its sign-in callback.
+// Jungle later sends the pasted callback to that port on its own loopback, so
+// only a server on this machine may name one: a local command (it runs here and
+// opened the listener), or an HTTP server on loopback, and then only its own
+// port. Without this rule a remote server's reply could choose which local
+// service Jungle calls once the operator pastes an address.
+func ownsCallback(s *model.McpServer, redirect *url.URL) bool {
+	var raw string
+	switch s.Transport {
+	case types.TransportStdio:
+		return true
+	case types.TransportStreamableHTTP:
+		c, err := s.GetStreamableHTTPConfig()
+		if err != nil {
+			return false
+		}
+		raw = c.URL
+	case types.TransportSSE:
+		c, err := s.GetSSEConfig()
+		if err != nil {
+			return false
+		}
+		raw = c.URL
+	default:
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return portOrDefault(u) == portOrDefault(redirect)
+	}
+	return false
 }
 
 // signInCallbackTarget checks an address the operator pasted after a consent
@@ -332,7 +372,7 @@ func (m *MCPService) MintSignIn(ctx context.Context, name string) (string, error
 			return "", fmt.Errorf("%s failed: %w", tool, err)
 		}
 		now := time.Now()
-		if link, found := findSignInLink(res, now); found {
+		if link, found := findSignInLink(s, res, now); found {
 			m.signIns.add(s.Name, link, now)
 			return link.authURL, nil
 		}
@@ -383,7 +423,7 @@ func (m *MCPService) CompleteSignIn(ctx context.Context, name, landed string) (*
 	switch {
 	case err != nil:
 		result.Error = fmt.Sprintf("The callback answered %d, but %s failed: %v", status, tool, err)
-	case m.signIns.observe(s.Name, res, time.Now()):
+	case m.signIns.observe(s, res, time.Now()):
 		result.Error = fmt.Sprintf("The callback answered %d, but %s still asks for a sign-in", status, tool)
 	case res.IsError:
 		result.Error = fmt.Sprintf("The callback answered %d, but %s returned an error", status, tool)

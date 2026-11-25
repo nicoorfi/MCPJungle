@@ -71,7 +71,7 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 		outcome = telemetry.ToolCallOutcomeError
 		return nil, err
 	}
-	m.signIns.observe(serverName, res, time.Now())
+	m.signIns.observe(server, res, time.Now())
 	return res, nil
 }
 

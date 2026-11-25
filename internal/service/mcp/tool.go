@@ -148,7 +148,7 @@ func (m *MCPService) InvokeTool(ctx context.Context, name string, args map[strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to call tool %s on MCP server %s: %w", toolName, serverName, err)
 	}
-	m.signIns.observe(serverName, callToolResp, time.Now())
+	m.signIns.observe(serverModel, callToolResp, time.Now())
 
 	// NOTE: callToolResp.Content is a list of Content objects.
 	// If the tool returns a list as its result, it gets converted to a list of Content objects.
